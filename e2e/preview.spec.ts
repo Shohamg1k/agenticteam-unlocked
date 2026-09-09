@@ -76,6 +76,17 @@ async function openFixture(page: import('@playwright/test').Page): Promise<void>
 
   expect(projectId).toBeTruthy();
   opened.add(projectId);
+
+  // Every test in this file starts from "nothing is running". The suite shares
+  // one server, so without this a test inherits whatever the previous one left
+  // started — and the status-bar button, which says "Go Live" when stopped and
+  // "Live" when running, then depends on test order rather than on behaviour.
+  await fetch(`${API}/preview/stop`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ projectId }),
+  }).catch(() => undefined);
+
   await page.reload();
   await expect(page.getByTitle('Core service: Connected')).toBeVisible();
 }
@@ -122,6 +133,47 @@ test.describe('the preview', () => {
     await expect(
       page.frameLocator('iframe[title="Application preview"]').locator('#headline'),
     ).toHaveText('About a static project');
+  });
+
+  test('offers Go Live from the status bar, before the preview tab is even open', async ({ page }) => {
+    await openFixture(page);
+
+    // The gap this closes: the only way to see a finished build was to know a
+    // Preview tab existed. The button says what it will do, so a folder of HTML
+    // reads "Go Live" rather than the dev-server wording it cannot honour.
+    const goLive = page.getByRole('button', { name: /Go Live/ });
+    await expect(goLive).toBeVisible();
+
+    await goLive.click();
+
+    await expect(
+      page.frameLocator('iframe[title="Application preview"]').locator('#headline'),
+    ).toHaveText('Hello from a static project');
+  });
+
+  test('opens a page straight from the file tree', async ({ page }) => {
+    await openFixture(page);
+
+    // The Live Server gesture, in the place people already look for it.
+    await page.getByRole('button', { name: 'Open about.html in the preview' }).click();
+
+    await expect(
+      page.frameLocator('iframe[title="Application preview"]').locator('#headline'),
+    ).toHaveText('About a static project');
+  });
+
+  test('checks the rendered layout and reports what is broken', async ({ page }) => {
+    await openFixture(page);
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+
+    const start = page.getByRole('button', { name: /Open in browser|Go Live|Start preview/ }).first();
+    if (await start.isVisible()) await start.click();
+
+    await page.getByRole('button', { name: 'Check layout' }).click();
+
+    // The fixture is deliberately fine, so the check has to say so rather than
+    // inventing something — a gate that always finds a problem is ignored.
+    await expect(page.getByText(/Nothing visibly broken/)).toBeVisible({ timeout: 30_000 });
   });
 
   test('shows the annotate control once something is running', async ({ page }) => {

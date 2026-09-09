@@ -25,6 +25,13 @@ import { loadReliability } from './router.js';
 import { describeError, log } from './log.js';
 
 /**
+ * Re-exported so the desktop shell can supply a renderer for visual checks
+ * without the server ever importing Electron. See `visual/renderer.ts`.
+ */
+export { registerVisualRenderer } from './visual/renderer.js';
+export type { VisualRenderer } from './visual/renderer.js';
+
+/**
  * The local core service.
  *
  * Binds 127.0.0.1 only. It is the only process that holds credentials or calls

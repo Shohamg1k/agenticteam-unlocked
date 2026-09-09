@@ -2,6 +2,7 @@ import React from 'react';
 import { useApp } from '../state.js';
 import { useTabs } from './tabs.js';
 import { openTab } from './AppShell.js';
+import { GoLiveButton } from './GoLiveButton.js';
 
 /**
  * The status bar.
@@ -114,6 +115,10 @@ export function StatusBar({ onOpenPanel }: { onOpenPanel: (panel: string) => voi
           {tight.length} provider{tight.length === 1 ? '' : 's'} near their limit
         </button>
       )}
+
+      {/* Beside the spend rather than at the far end: this is an action, and
+          the right-hand cluster is status. */}
+      <GoLiveButton compact />
 
       <button
         type="button"

@@ -52,10 +52,12 @@ import {
   clearPreviewTelemetry,
   recordConsole,
   recordNetworkError,
+  previewState,
   removeAnnotation,
   startPreview,
   stopPreview,
 } from './preview.js';
+import { auditUrl } from './visual/renderer.js';
 import { closeTerminal, createTerminal } from './pty.js';
 import { deleteSecret, hasSecret, listAccounts, setSecret, vaultBackend } from './vault.js';
 import { probeAll, providerStatuses, setAgentPermissions, setProviderAccount } from './providers/index.js';
@@ -990,6 +992,31 @@ export function buildRouter(): Router {
       const projectId = requireProjectId(req);
       removeAnnotation(projectId, req.params.id!);
       ok(res, { annotations: annotationsOf(projectId) });
+    }),
+  );
+
+  /**
+   * Render the running preview and report what is visibly broken.
+   *
+   * The same check the verification loop runs, on demand. Worth exposing
+   * because a person looking at a page they think is wrong wants a second
+   * opinion with coordinates, and because the automatic gate only fires on a
+   * task's own output — a page can break from a combination of accepted
+   * changes that no single task produced.
+   */
+  router.post(
+    '/preview/audit',
+    handler(async (req, res) => {
+      const projectId = requireProjectId(req);
+      const preview = previewState(projectId);
+      if (!preview?.url || preview.status !== 'running') {
+        return fail(res, 400, 'Start the preview first', 'There is no running page to look at.');
+      }
+
+      const width = Number(req.body?.width) || 1280;
+      const height = Number(req.body?.height) || 900;
+      const audit = await auditUrl(preview.url, { width, height });
+      ok(res, audit);
     }),
   );
 

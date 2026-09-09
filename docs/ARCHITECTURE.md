@@ -156,6 +156,7 @@ sequenceDiagram
 | Routing         | Every choice returns its score breakdown and is shown to you                           | `core/routing.scoreCandidates`             |
 | Failover        | The same context pack and worklog move to the next rung — continued, not restarted     | `server/orchestrator`                      |
 | Tier 1          | Every produced file parses, with one bounded auto-repair from the real error           | `server/verify`                            |
+| Visual          | The page is rendered at two widths and checked for layouts that are objectively broken | `server/visual/check`                       |
 | Tier 2          | The project's own typecheck/lint/test/build, in a throwaway worktree                   | `server/projectchecks`                     |
 | Human gate      | Enforced at the route layer, not in the UI                                             | `server/routes`                            |
 | Taint           | External content never becomes instructions, and never self-accepts                    | `server/taint`                             |
@@ -163,6 +164,47 @@ sequenceDiagram
 | Effort          | A task gets the model, effort and verification its complexity warrants, not the maximum | `core/profiles.profileFor`                 |
 | Expertise       | A task is matched to the specialist prompt and skills for what it is about              | `core/matching.selectAgent`                |
 | Placeholders    | A file the model described instead of writing never reaches disk                        | `server/placeholders`                      |
+
+## Visual verification
+
+Tier 1 asks whether the files parse. Tier 2 asks whether the project's own suite
+passes. Neither can tell you whether the page is broken, and a run proved it: a
+calculator shipped whose CSS grid had a hole in it — one key had a span, every
+key after it had shifted, and the last sat alone on a row of its own. It parsed,
+had no secrets, and the greenfield project had no tests to fail. It was accepted
+as verified and it was visibly wrong.
+
+So between the two tiers, the page is rendered and looked at. The task's files
+are served from memory as an overlay on the project, so the working tree is
+still untouched when a human sees the result, and the page is loaded at a phone
+width and a desktop width, because a layout that survives one and collapses at
+the other is the most common defect there is.
+
+What it checks is deliberately narrow — things that are objectively broken, not
+matters of taste:
+
+| Check | What it catches |
+| ----- | --------------- |
+| grid holes | An empty cell in the middle of a grid; the items after it are misplaced |
+| horizontal overflow | The page scrolls sideways, naming the element that is too wide |
+| overlap | Two in-flow siblings drawn on top of each other |
+| unclickable | A control with no clickable area |
+| clipped text | Text cut off with no ellipsis (a warning: it is sometimes intended) |
+| invisible text | Text under 2:1 contrast against its own background |
+| empty page | Nothing rendered at all |
+| load failures | Uncaught exceptions and sub-resources that 404 |
+
+Every one had to pass the same test to be included: could a competent person
+look at it and call it deliberate? Where that is ever plausible it is a warning;
+where it is not, it is an error and the task is sent back with the measurement.
+The counterpart tests matter as much as the detection ones — a gate that fires
+on a legitimate visually-hidden label or a partially-filled last row is a gate
+people learn to ignore.
+
+Rendering needs a browser, and the dependency is inverted so the server never
+imports one. The desktop app already ships Chromium and registers it at boot;
+a development checkout falls back to Playwright; an installation with neither
+reports the check as SKIPPED with a reason, never as passed.
 
 ## How hard a task tries
 
@@ -229,6 +271,7 @@ packages/core/     contracts, DAG, routing, profiles, matching, artifact parsing
 server/            orchestrator, adapters, git, pty, preview, connectors
   src/providers/   one file per provider; nothing else imports a vendor SDK
   src/library/     built-in specialist agents and skills, matched per task
+  src/visual/      renders a page and reports what is visibly broken
 web/               React shell: Monaco, tabs, terminal, preview, chat
 desktop/           Electron main process, packaging
 cli/               `at` — headless access to the same server

@@ -92,9 +92,26 @@ export async function startStaticServer(opts: {
   /** Injected into every HTML response, before the reload client. */
   overlay?: string;
   projectId: string;
+  /**
+   * Files to serve INSTEAD of what is on disk, keyed by project-relative path.
+   *
+   * This is what lets the visual check look at work that has not been accepted
+   * yet. A task's output is held in memory until a human accepts it, so
+   * rendering it any other way would mean writing it to the working tree first
+   * — which is precisely the promise the whole review flow exists to keep.
+   * With an overlay, the page is served as it WOULD be, and nothing is written.
+   */
+  overrides?: Map<string, string>;
 }): Promise<StaticServer> {
   const root = path.resolve(opts.root);
   const clients = new Set<http.ServerResponse>();
+
+  // Normalised once: a lookup happens on every request, and the map is keyed by
+  // whatever the caller had — which is Windows separators about half the time.
+  const overrides = new Map<string, string>();
+  for (const [key, value] of opts.overrides ?? []) {
+    overrides.set(key.split(path.sep).join('/').replace(/^\.?\//, ''), value);
+  }
 
   const server = http.createServer(async (req, res) => {
     const url = new URL(req.url ?? '/', 'http://127.0.0.1');
@@ -108,6 +125,23 @@ export async function startStaticServer(opts: {
       res.write('retry: 500\n\n');
       clients.add(res);
       req.on('close', () => clients.delete(res));
+      return;
+    }
+
+    const relative = decodeURIComponent(url.pathname).replace(/^\//, '');
+    const override =
+      overrides.get(relative) ?? (relative === '' ? overrides.get('index.html') : undefined) ??
+      (relative.endsWith('/') ? overrides.get(`${relative}index.html`) : undefined);
+
+    if (override !== undefined) {
+      const isHtml = /\.html?$/i.test(relative) || relative === '' || relative.endsWith('/');
+      const body = isHtml ? injectIntoHtml(override, opts.overlay, RELOAD_CLIENT) : override;
+      res.writeHead(200, {
+        'content-type': isHtml ? 'text/html; charset=utf-8' : (MIME[path.extname(relative).toLowerCase()] ?? 'text/plain; charset=utf-8'),
+        'cache-control': 'no-store, must-revalidate',
+        'content-length': String(Buffer.byteLength(body)),
+      });
+      res.end(body);
       return;
     }
 

@@ -3,6 +3,7 @@ import type { DevelopmentMode, ExecutionMode } from '@agentic/core';
 import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
+import { GoLiveButton } from '../shell/GoLiveButton.js';
 import { TaskRow } from '../views/TaskPanel.js';
 import { OpenFolderButton } from '../views/FileTree.js';
 import { IconSend } from '../shell/Icons.js';
@@ -147,17 +148,23 @@ export function ChatTab() {
                     {plan.summary}
                   </div>
                 )}
-                <div className="card__footer" style={{ justifyContent: 'space-between' }}>
+                <div className="card__footer" style={{ justifyContent: 'space-between', gap: 8 }}>
                   <span className="subtle" style={{ fontSize: 'var(--text-xs)' }}>
                     {tasks.length} tasks · {plan.spend.calls} model calls · ${plan.spend.costUsd.toFixed(4)}
                   </span>
-                  <button
-                    type="button"
-                    className="btn btn--ghost btn--sm"
-                    onClick={() => tabs.open({ kind: 'tasks', target: plan.id, title: 'Task graph' })}
-                  >
-                    Open the task graph
-                  </button>
+                  <span className="row" style={{ gap: 8 }}>
+                    <button
+                      type="button"
+                      className="btn btn--ghost btn--sm"
+                      onClick={() => tabs.open({ kind: 'tasks', target: plan.id, title: 'Task graph' })}
+                    >
+                      Open the task graph
+                    </button>
+                    {/* The thing you want the moment a build finishes, at the
+                        moment it finishes. Anywhere else and it is a feature
+                        you have to already know about. */}
+                    {plan.status === 'completed' && <GoLiveButton />}
+                  </span>
                 </div>
               </div>
 

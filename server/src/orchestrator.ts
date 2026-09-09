@@ -37,6 +37,7 @@ import { recordOutcome, routeTask, activePolicy } from './router.js';
 import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
 import { repairFeedback, scanForSecrets, verifyArtifacts } from './verify.js';
 import { findPlaceholders, placeholderFeedback, placeholderIssues } from './placeholders.js';
+import { runVisualCheck, visualFeedback } from './visual/check.js';
 import { auditAutoAccept, checkGate, enqueueReview } from './review.js';
 import { takeCheckpoint } from './checkpoints.js';
 import { collectWorktreeChanges, createWorktree } from './git.js';
@@ -1023,6 +1024,50 @@ async function runAttempt(args: {
     return { kind: 'verification-failed', feedback };
   }
 
+  // ---- Visual: does it actually render? --------------------------------
+  //
+  // Between the two tiers, and the reason it exists is a run that got all the
+  // way through them. A calculator was produced whose CSS grid had a hole in
+  // it: one key had a span, every key after it had shifted, and the last sat
+  // alone on a row of its own. It parsed. It had no secrets. The project had no
+  // test suite to fail. It was accepted as verified, and it was visibly wrong.
+  //
+  // Nothing had looked at the page. Now something does — rendered from the
+  // task's own output, served from memory, so the working tree is still
+  // untouched when a human sees the result.
+  //
+  // It runs on every profile, including the fast one. It is the check that
+  // most needs to run there: the fast profile is where single-page apps land,
+  // it skips the project's own suite, and a greenfield project has no suite to
+  // skip in the first place.
+  const visual = await runVisualCheck({
+    projectId: run.projectId,
+    root: ps.root,
+    files,
+  });
+
+  if (visual.unavailable) {
+    worklog(task, 'verification', visual.unavailable, 'info');
+  } else if (!visual.ok) {
+    task.verification = {
+      ok: false,
+      tier1,
+      tier2: [visual.check],
+      repairs: previousRepairs + 1,
+      at: Date.now(),
+    };
+    attempt.outcome = 'verification-failed';
+    worklog(
+      task,
+      'verification',
+      `The page renders wrong: ${visual.check.issues.filter((i) => i.severity === 'error').length} problem(s) found in a real browser.`,
+      'warn',
+    );
+    return { kind: 'verification-failed', feedback: visualFeedback(visual.check) };
+  } else {
+    worklog(task, 'verification', `Rendered and checked ${visual.check.checked ?? 0} page view(s) — no layout problems.`);
+  }
+
   // ---- Tier 2: the project's own checks --------------------------------
   //
   // Skipped on the fast profile, and recorded as skipped rather than passed.
@@ -1056,7 +1101,11 @@ async function runAttempt(args: {
   const report: VerificationReport = {
     ok: tier1.ok && tier2.ok,
     tier1,
-    tier2: tier2.checks,
+    // The visual check is listed alongside the project checks so the review
+    // summary says what was looked at. It passed to get here, but "rendered
+    // two viewports and found nothing" and "nobody looked" must not read the
+    // same in the report — which is why a skipped one is carried too.
+    tier2: [visual.check, ...tier2.checks],
     repairs: previousRepairs,
     at: Date.now(),
   };

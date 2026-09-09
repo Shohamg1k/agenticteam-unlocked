@@ -183,6 +183,34 @@ export interface PreviewNetworkError {
   ts: number;
 }
 
+/**
+ * What the visual check found on one rendered page.
+ *
+ * Shared because both the verification report and the manual "check this page"
+ * action produce it, and the UI renders them the same way.
+ */
+export interface PageAuditResult {
+  url: string;
+  title: string;
+  viewport: { width: number; height: number };
+  findings: {
+    check: string;
+    severity: 'error' | 'warning';
+    selector: string;
+    message: string;
+    detail?: string;
+  }[];
+  /** Uncaught exceptions the page threw while loading. */
+  consoleErrors: string[];
+  /** Sub-resources the page asked for and did not get. */
+  failedRequests: string[];
+}
+
+/** Returned instead of an audit when there is no way to render the page. */
+export interface PageAuditUnavailable {
+  unavailable: string;
+}
+
 export interface TerminalInfo {
   id: string;
   projectId?: string;

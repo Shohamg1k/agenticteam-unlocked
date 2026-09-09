@@ -61,6 +61,55 @@ export function previewStates(): PreviewState[] {
   return [...previews.values()].map((p) => p.state);
 }
 
+/**
+ * What starting a preview for this project WOULD do.
+ *
+ * The UI needs this before anything is running, because the button has to say
+ * which of the two things it is: "Open in browser" for a folder of HTML, or
+ * "Run the dev server" for a project with a build step. A button that says
+ * "Start preview" and then does something surprising is worse than either.
+ *
+ * Cached, because a snapshot is built roughly every 120ms while a plan runs and
+ * this walks the project tree. The cache is dropped whenever a file changes, so
+ * a project that becomes previewable — an agent writing the first index.html,
+ * which is exactly the interesting moment — is reflected immediately.
+ */
+const capabilityCache = new Map<string, PreviewState>();
+
+export function previewCapability(projectId: string): PreviewState | undefined {
+  const live = previews.get(projectId);
+  if (live) return live.state;
+
+  const cached = capabilityCache.get(projectId);
+  if (cached) return cached;
+
+  const ps = projectState(projectId);
+  if (!ps) return undefined;
+
+  const profile = profileProject(ps.root);
+  const htmlFiles = findHtmlFiles(ps.root);
+  const isStatic = shouldServeStatically({ hasDevServer: Boolean(profile.devServer), htmlFiles });
+
+  const state: PreviewState = {
+    projectId,
+    status: 'stopped',
+    mode: isStatic ? 'static' : profile.devServer ? 'dev-server' : undefined,
+    entryFile: isStatic ? htmlFiles[0] : undefined,
+    htmlFiles: htmlFiles.length ? htmlFiles : undefined,
+    command: profile.devServer?.command,
+    consoleLines: [],
+    networkErrors: [],
+    annotations: [],
+  };
+
+  capabilityCache.set(projectId, state);
+  return state;
+}
+
+export function forgetPreviewCapability(projectId: string): void {
+  capabilityCache.delete(projectId);
+}
+
 export function previewState(projectId: string): PreviewState | undefined {
   return previews.get(projectId)?.state;
 }
@@ -515,6 +564,11 @@ export function annotationsOf(projectId: string): PreviewAnnotation[] {
  * the first one carefully preserved.
  */
 export function reloadStaticPreview(projectId: string): void {
+  // A file changed, so what starting a preview would do may have changed with
+  // it — an agent writing the project's first index.html is exactly the moment
+  // the button should stop saying "start the dev server".
+  forgetPreviewCapability(projectId);
+
   const preview = previews.get(projectId);
   if (preview?.state.mode === 'static') preview.static?.reload();
 }

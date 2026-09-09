@@ -2,6 +2,7 @@ import { BrowserWindow, Menu, app, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
 import { registerIpcHandlers } from './ipc.js';
+import { createElectronRenderer } from './visual.js';
 
 /**
  * The Electron main process (ADR 0001).
@@ -34,10 +35,17 @@ let stopServer: (() => Promise<void>) | undefined;
  * exactly when the app does.
  */
 async function startCoreService(): Promise<number> {
-  const { startServer } = (await import('@agentic/server')) as {
+  const server = (await import('@agentic/server')) as {
     startServer: () => Promise<{ port: number; close: () => Promise<void> }>;
+    registerVisualRenderer: (renderer: ReturnType<typeof createElectronRenderer>) => void;
   };
-  const { port, close } = await startServer();
+
+  // Hand the service a browser before it starts, so the very first task can be
+  // checked visually. This app already ships Chromium; the service must never
+  // import Electron itself, or running it headless would need one too.
+  server.registerVisualRenderer(createElectronRenderer());
+
+  const { port, close } = await server.startServer();
   stopServer = close;
   return port;
 }

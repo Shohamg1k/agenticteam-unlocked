@@ -367,6 +367,30 @@
   background: var(--bg-selected);
 }
 
+/*
+ * A row action that appears on hover.
+ *
+ * Hidden rather than dimmed: a file tree is a dense list, and a control on
+ * every row turns it into a column of buttons. Focus reveals it too, so it is
+ * reachable without a mouse — an action only a pointer can find is an action
+ * half the users do not have.
+ */
+.list__action {
+  opacity: 0;
+  flex: 0 0 auto;
+  transition: opacity 120ms ease-out;
+}
+.list__item:hover .list__action,
+.list__item:focus-within .list__action,
+.list__action:focus-visible {
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .list__action {
+    transition: none;
+  }
+}
+
 /* ---- Modal --------------------------------------------------------------- */
 
 .modal__backdrop {

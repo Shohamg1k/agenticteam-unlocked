@@ -10,6 +10,8 @@ import type {
   MemoryNote,
   NodeConfig,
   Plan,
+  PageAuditResult,
+  PageAuditUnavailable,
   PreviewAnnotation,
   PreviewState,
   Project,
@@ -263,6 +265,8 @@ export const api = {
     post<{ annotations: PreviewAnnotation[] }>('/preview/annotations', { projectId, ...annotation }),
   removeAnnotation: (projectId: string, id: string) =>
     del<{ annotations: PreviewAnnotation[] }>(`/preview/annotations/${id}?projectId=${projectId}`),
+  auditPreview: (projectId: string, width?: number, height?: number) =>
+    post<PageAuditResult | PageAuditUnavailable>('/preview/audit', { projectId, width, height }),
   clearAnnotations: (projectId: string) =>
     post<{ annotations: PreviewAnnotation[] }>('/preview/annotations/clear', { projectId }),
 

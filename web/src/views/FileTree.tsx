@@ -3,7 +3,14 @@ import { api } from '../api.js';
 import type { TreeEntry } from '../api.js';
 import { useApp, useAction } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
-import { IconChevronDown, IconChevronRight, IconFile, IconFolder, IconRefresh } from '../shell/Icons.js';
+import {
+  IconChevronDown,
+  IconChevronRight,
+  IconFile,
+  IconFolder,
+  IconPreview,
+  IconRefresh,
+} from '../shell/Icons.js';
 import { OpenFolderButton } from './OpenFolderDialog.js';
 
 /**
@@ -35,6 +42,8 @@ function TreeNode({ entry, depth, projectId }: NodeProps) {
 
   const isDir = entry.kind === 'directory';
   const changed = changedFiles.has(entry.path);
+  // The Live Server gesture, in the place people already right-click for it.
+  const isPage = !isDir && /\.html?$/i.test(entry.name);
 
   const toggle = useCallback(async () => {
     if (!isDir) return;
@@ -97,6 +106,23 @@ function TreeNode({ entry, depth, projectId }: NodeProps) {
           {isDir ? <IconFolder size={13} /> : <IconFile size={13} />}
         </span>
         <span className="truncate grow">{entry.name}</span>
+        {isPage && (
+          <button
+            type="button"
+            className="btn btn--ghost btn--icon list__action"
+            title={`Open ${entry.name} in the preview`}
+            aria-label={`Open ${entry.name} in the preview`}
+            onClick={(event) => {
+              // Without this the row's own click opens the file in the editor
+              // as well, and you get two tabs for one gesture.
+              event.stopPropagation();
+              void run(() => api.startPreview(projectId, entry.path));
+              tabs.open({ kind: 'preview', title: 'Preview' });
+            }}
+          >
+            <IconPreview size={12} />
+          </button>
+        )}
         {changed && (
           <span className="badge badge--info" title="Changed on disk since you opened it">
             M

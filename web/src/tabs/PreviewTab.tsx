@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ElementTarget } from '@agentic/core';
+import type { ElementTarget, PageAuditResult } from '@agentic/core';
 import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { IconPlay, IconRefresh, IconStop, IconTarget } from '../shell/Icons.js';
@@ -33,6 +33,9 @@ export function PreviewTab({ active }: { active: boolean }) {
   const [instruction, setInstruction] = useState('');
   const [starting, setStarting] = useState(false);
   const [showConsole, setShowConsole] = useState(false);
+  const [audit, setAudit] = useState<PageAuditResult>();
+  const [auditNote, setAuditNote] = useState<string>();
+  const [auditing, setAuditing] = useState(false);
   // Bumping this remounts the iframe. The preview is served from a different
   // origin than the app, so `contentWindow.location.reload()` would throw —
   // a remount is the only reload available to us, and it is also the one that
@@ -148,6 +151,53 @@ export function PreviewTab({ active }: { active: boolean }) {
     }
   };
 
+  /**
+   * Render the page and report what is objectively broken.
+   *
+   * The same check the verification loop runs on a task's output, on demand.
+   * Useful for the case the automatic gate cannot cover: a page that breaks
+   * from a combination of accepted changes, which no single task produced.
+   */
+  const checkLayout = async () => {
+    if (!activeProject) return;
+    setAuditing(true);
+    setAudit(undefined);
+    setAuditNote(undefined);
+    try {
+      const result = await api.auditPreview(activeProject.id);
+      if (result && 'unavailable' in result) setAuditNote(result.unavailable);
+      else if (result) setAudit(result);
+    } catch (err) {
+      setAuditNote(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAuditing(false);
+    }
+  };
+
+  /**
+   * Hand the findings to an agent verbatim.
+   *
+   * Each one already carries the element and the measurement, which is exactly
+   * what a repair needs and exactly what a person retyping "the layout looks
+   * wrong" would leave out.
+   */
+  const fixFindings = async (result: PageAuditResult) => {
+    if (!activeProject) return;
+    const issues = auditIssues(result);
+    const instruction = [
+      `The page at ${result.url} was rendered at ${result.viewport.width}x${result.viewport.height} and`,
+      'these problems were measured on it. Fix the layout and emit the complete files.',
+      '',
+      ...issues.map((i) => `- [${i.severity}] ${i.message}${i.detail ? ` ${i.detail}` : ''}${i.selector ? ` (${i.selector})` : ''}`),
+    ].join('\n');
+
+    const sent = await run(() => api.scopedEdit(activeProject.id, instruction), 'Sent to the team');
+    if (sent) {
+      setAudit(undefined);
+      setAuditNote(undefined);
+    }
+  };
+
   if (!activeProject) return <div className="empty">Open a folder to use the preview.</div>;
 
   const errors = (preview?.consoleLines ?? []).filter((l) => l.level === 'error');
@@ -221,6 +271,29 @@ export function PreviewTab({ active }: { active: boolean }) {
             <span className="mono subtle truncate grow" style={{ fontSize: 'var(--text-xs)' }}>
               {preview.url}
             </span>
+
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              disabled={auditing}
+              onClick={() => void checkLayout()}
+              title="Render the page and report anything visibly broken"
+            >
+              {auditing ? <span className="spinner" /> : null}
+              {auditing ? 'Checking…' : 'Check layout'}
+            </button>
+
+            {/* Opening in the real browser is the one thing the embedded frame
+                cannot be: a place to test with your own extensions, your own
+                devtools and your own logged-in session. */}
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              title="Open this page in your own browser"
+              onClick={() => window.agentic?.openExternal?.(preview.url!)}
+            >
+              Open in browser
+            </button>
 
             <button
               type="button"
@@ -310,6 +383,104 @@ export function PreviewTab({ active }: { active: boolean }) {
           </div>
         )}
       </div>
+
+      {(audit || auditNote) && (
+        <div
+          style={{
+            borderTop: '1px solid var(--border)',
+            background: 'var(--bg-panel)',
+            maxHeight: 220,
+            overflow: 'auto',
+          }}
+        >
+          <div
+            className="row"
+            style={{
+              gap: 8,
+              padding: '4px var(--space-3)',
+              borderBottom: '1px solid var(--border)',
+              fontSize: 'var(--text-xs)',
+              position: 'sticky',
+              top: 0,
+              background: 'var(--bg-panel)',
+            }}
+          >
+            <strong>Layout check</strong>
+            {audit && (
+              <span className="subtle">
+                rendered at {audit.viewport.width}×{audit.viewport.height}
+              </span>
+            )}
+            <span className="grow" />
+            {/* Sending the findings to an agent is the point of having them:
+                each one carries the element and the measurement, which is
+                exactly what a repair needs and what a person retyping it would
+                leave out. */}
+            {audit && auditIssues(audit).length > 0 && (
+              <button
+                type="button"
+                className="btn btn--primary btn--sm"
+                onClick={() => void fixFindings(audit)}
+              >
+                Ask the team to fix these
+              </button>
+            )}
+            <button
+              type="button"
+              className="btn btn--ghost btn--sm"
+              onClick={() => {
+                setAudit(undefined);
+                setAuditNote(undefined);
+              }}
+            >
+              Dismiss
+            </button>
+          </div>
+
+          {auditNote && (
+            <div className="pad subtle" style={{ fontSize: 'var(--text-xs)' }}>
+              {auditNote}
+            </div>
+          )}
+
+          {audit && auditIssues(audit).length === 0 && (
+            <div className="pad" style={{ fontSize: 'var(--text-xs)' }}>
+              <span className="dot dot--ok" /> Nothing visibly broken: no overflow, no overlapping
+              elements, no unreachable controls, no unreadable text.
+            </div>
+          )}
+
+          {audit && (
+            <ul style={{ margin: 0, padding: '4px 0', listStyle: 'none' }}>
+              {auditIssues(audit).map((issue, index) => (
+                <li
+                  key={index}
+                  style={{
+                    padding: '4px var(--space-3)',
+                    fontSize: 'var(--text-xs)',
+                    display: 'flex',
+                    gap: 8,
+                    alignItems: 'baseline',
+                  }}
+                >
+                  <span
+                    className={`badge ${issue.severity === 'error' ? 'badge--danger' : 'badge--warning'}`}
+                  >
+                    {issue.severity === 'error' ? 'broken' : 'check'}
+                  </span>
+                  <span className="grow">
+                    {issue.message}
+                    {issue.detail && <span className="subtle"> {issue.detail}</span>}
+                    {issue.selector && (
+                      <span className="mono subtle"> — {issue.selector}</span>
+                    )}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
 
       {annotations.length > 0 && (
         <div
@@ -477,6 +648,41 @@ export function PreviewTab({ active }: { active: boolean }) {
       )}
     </div>
   );
+}
+
+/**
+ * Everything the audit found, page findings and load failures together.
+ *
+ * The page cannot see its own uncaught exceptions or its failed requests
+ * reliably — the renderer observes those from outside — so they arrive
+ * separately and are folded in here, because to a reader they are all just
+ * "what is wrong with this page".
+ */
+function auditIssues(audit: PageAuditResult): {
+  severity: 'error' | 'warning';
+  message: string;
+  detail?: string;
+  selector?: string;
+}[] {
+  return [
+    ...audit.findings.map((f) => ({
+      severity: f.severity,
+      message: f.message,
+      detail: f.detail,
+      selector: f.selector,
+    })),
+    ...audit.consoleErrors.slice(0, 5).map((text) => ({
+      severity: 'error' as const,
+      message: `The page threw while loading: ${text}`,
+    })),
+    ...audit.failedRequests
+      .filter((url) => !url.includes('__agentic__/reload'))
+      .slice(0, 5)
+      .map((text) => ({
+        severity: 'error' as const,
+        message: `The page asked for something it did not get: ${text}`,
+      })),
+  ];
 }
 
 /**
