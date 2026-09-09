@@ -80,6 +80,45 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
     app.get('*', (_req, res) => res.sendFile(path.join(webDist, 'index.html')));
   }
 
+  /**
+   * Last-resort error handler.
+   *
+   * Registered last, and with four parameters so Express recognises it as an
+   * error handler. Without it, anything that throws before a route runs — a
+   * malformed JSON body is the common one — falls through to Express's default
+   * handler, which returns an HTML page. A client that only ever parses JSON
+   * then fails on the error itself and reports something unrelated.
+   */
+  app.use(
+    (
+      err: Error & { status?: number; type?: string },
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction,
+    ) => {
+      if (res.headersSent) return next(err);
+
+      const malformedBody = err.type === 'entity.parse.failed';
+      const tooLarge = err.type === 'entity.too.large';
+      const status = malformedBody ? 400 : tooLarge ? 413 : (err.status ?? 500);
+
+      if (!malformedBody && !tooLarge) {
+        log(`${req.method} ${req.path} failed: ${describeError(err)}`, 'error');
+      }
+
+      res.status(status).json({
+        error: malformedBody
+          ? 'That request body was not valid JSON.'
+          : tooLarge
+            ? 'That request body is too large.'
+            : describeError(err),
+        hint: malformedBody
+          ? 'Check the escaping — a Windows path needs its backslashes doubled in JSON.'
+          : undefined,
+      });
+    },
+  );
+
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
 

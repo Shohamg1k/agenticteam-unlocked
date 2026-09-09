@@ -1,6 +1,7 @@
-import { BrowserWindow, Menu, app, dialog, ipcMain, shell } from 'electron';
+import { BrowserWindow, Menu, app, dialog, shell } from 'electron';
 import path from 'node:path';
 import fs from 'node:fs';
+import { registerIpcHandlers } from './ipc.js';
 
 /**
  * The Electron main process (ADR 0001).
@@ -162,32 +163,6 @@ function buildMenu(): void {
 }
 
 // ---------------------------------------------------------------------------
-// IPC — the entire privileged surface
-// ---------------------------------------------------------------------------
-
-ipcMain.handle('agentic:pick-folder', async (): Promise<string | null> => {
-  if (!mainWindow) return null;
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: 'Choose a project folder',
-    // `createDirectory` matters: starting a new project from nothing is a real
-    // first-run path, and forcing the user out to Explorer first is friction.
-    properties: ['openDirectory', 'createDirectory'],
-    buttonLabel: 'Open as project',
-  });
-  return result.canceled ? null : (result.filePaths[0] ?? null);
-});
-
-ipcMain.on('agentic:show-item', (_event, filePath: unknown) => {
-  if (typeof filePath === 'string') shell.showItemInFolder(filePath);
-});
-
-ipcMain.on('agentic:open-external', (_event, url: unknown) => {
-  // Only http(s). A `file://` or `javascript:` URL from the renderer would be
-  // a way to run something the user did not ask for.
-  if (typeof url === 'string' && /^https?:\/\//.test(url)) void shell.openExternal(url);
-});
-
-// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -204,6 +179,7 @@ if (!app.requestSingleInstanceLock()) {
 
   app.whenReady().then(async () => {
     buildMenu();
+    registerIpcHandlers(() => mainWindow);
     try {
       const port = await startCoreService();
       createWindow(port);

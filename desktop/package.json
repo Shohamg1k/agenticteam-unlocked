@@ -9,7 +9,10 @@
     "dev": "node build.mjs && cross-env AGENTIC_DEV=1 electron .",
     "start": "electron .",
     "package": "node build.mjs && electron-builder",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "check:preload": "electron scripts/check-preload.mjs",
+    "verify": "node build.mjs && npm run check:preload && npm run check:open-folder",
+    "check:open-folder": "electron scripts/check-open-folder.mjs"
   },
   "dependencies": {
     "@agentic/server": "*"

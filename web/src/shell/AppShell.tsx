@@ -6,6 +6,7 @@ import { TabStrip } from './TabStrip.js';
 import { TabHost } from './TabHost.js';
 import { StatusBar } from './StatusBar.js';
 import { Toasts } from './Toasts.js';
+import { OpenFolderHost } from '../views/OpenFolderDialog.js';
 import { FileTree } from '../views/FileTree.js';
 import { TaskPanel } from '../views/TaskPanel.js';
 import { InboxPanel } from '../views/InboxPanel.js';
@@ -208,6 +209,8 @@ export function AppShell() {
 
       <StatusBar onOpenPanel={(id) => selectPanel(id as PanelId)} />
       <Toasts />
+      {/* Mounted once, so the File menu and every button share one flow. */}
+      <OpenFolderHost />
     </div>
   );
 }

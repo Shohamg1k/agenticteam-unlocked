@@ -91,6 +91,26 @@ jobs:
         shell: bash
         run: test -f web/dist/index.html && test -f desktop/dist/main.cjs
 
+      # "Open a folder" is the first thing anyone does, and when it breaks it
+      # breaks SILENTLY: the window still loads, `window.agentic` is simply
+      # undefined, and the button does nothing with no error anywhere a user
+      # would look. These boot a real Electron window and drive the real
+      # handlers, because nothing short of that catches it.
+      - name: The desktop bridge and folder picker actually work
+        shell: bash
+        run: |
+          # Electron needs a display, and the Linux runner has none.
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            sudo apt-get update -qq
+            sudo apt-get install -y -qq xvfb
+            xvfb-run -a npm run check:preload -w @agentic/desktop
+            xvfb-run -a npm run check:open-folder -w @agentic/desktop
+          else
+            npm run check:preload -w @agentic/desktop
+            npm run check:open-folder -w @agentic/desktop
+          fi
+
+
   e2e:
     name: End-to-end smoke
     needs: check

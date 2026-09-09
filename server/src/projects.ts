@@ -46,6 +46,22 @@ export async function openProject(root: string, name?: string): Promise<Project>
   try {
     stat = fs.statSync(abs);
   } catch (err) {
+    // A missing folder is by far the most common failure here — usually a typo
+    // or a pasted path with a stray quote — so it gets a sentence rather than
+    // a raw errno.
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') {
+      throw new ProjectError(
+        `There is no folder at ${abs}`,
+        'Check the path for a typo. On Windows you can paste it from the address bar in Explorer.',
+      );
+    }
+    if (code === 'EACCES' || code === 'EPERM') {
+      throw new ProjectError(
+        `You do not have permission to read ${abs}`,
+        'Pick a folder your user account owns.',
+      );
+    }
     throw new ProjectError(
       `Cannot open ${abs}: ${describeError(err)}`,
       'Check the path exists and is readable.',

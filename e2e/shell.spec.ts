@@ -67,6 +67,46 @@ test.describe('the shell', () => {
     await expect(page.getByRole('tab')).toHaveCount(1);
   });
 
+  test('opening a folder works from the button and from the File menu', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByTitle('Core service: Connected')).toBeVisible();
+
+    // The button. In a browser there is no native picker, so this is the
+    // path-entry dialog — the same one the desktop app falls back to when the
+    // picker fails.
+    await page.getByRole('button', { name: 'Open a folder', exact: true }).last().click();
+    await expect(page.getByRole('dialog', { name: 'Open a project folder' })).toBeVisible();
+    await page.getByRole('button', { name: 'Close' }).click();
+    await expect(page.getByRole('dialog')).toBeHidden();
+
+    // The File menu. The Electron main process sends this over IPC and the
+    // preload rebroadcasts it as exactly this DOM event. Nothing listened for
+    // it once, so Ctrl+O silently did nothing.
+    await page.evaluate(() =>
+      window.dispatchEvent(new CustomEvent('agentic:menu', { detail: 'open-folder' })),
+    );
+    await expect(page.getByRole('dialog', { name: 'Open a project folder' })).toBeVisible();
+
+    // Escape closes it, as it does in every dialog anyone has used.
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog')).toBeHidden();
+  });
+
+  test('the open-folder dialog reports a bad path instead of failing silently', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByTitle('Core service: Connected')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Open a folder', exact: true }).last().click();
+
+    await page.getByLabel('Full path to the folder').fill('/definitely/not/a/real/folder');
+    await page.getByRole('button', { name: 'Open', exact: true }).click();
+
+    // The dialog stays open, says what was wrong, and keeps what was typed.
+    await expect(page.getByText(/There is no folder at/)).toBeVisible();
+    await expect(page.getByRole('dialog')).toBeVisible();
+    await expect(page.getByLabel('Full path to the folder')).toHaveValue('/definitely/not/a/real/folder');
+  });
+
   test('the routing policy editor renders the shipped policy', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByTitle('Core service: Connected')).toBeVisible();

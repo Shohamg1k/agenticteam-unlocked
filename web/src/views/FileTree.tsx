@@ -3,14 +3,8 @@ import { api } from '../api.js';
 import type { TreeEntry } from '../api.js';
 import { useApp, useAction } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
-import {
-  IconChevronDown,
-  IconChevronRight,
-  IconFile,
-  IconFolder,
-  IconPlus,
-  IconRefresh,
-} from '../shell/Icons.js';
+import { IconChevronDown, IconChevronRight, IconFile, IconFolder, IconRefresh } from '../shell/Icons.js';
+import { OpenFolderButton } from './OpenFolderDialog.js';
 
 /**
  * The file explorer.
@@ -234,50 +228,7 @@ export function FileTree() {
   );
 }
 
-/**
- * Opening a folder.
- *
- * In the desktop app this goes through the native picker exposed on the
- * preload bridge. In a plain browser there is no way to get a real filesystem
- * path from a file input, so it falls back to asking for one — and says why.
- */
-export function OpenFolderButton({ icon }: { icon?: boolean }) {
-  const run = useAction();
-  const { toast } = useApp();
-
-  const pick = async () => {
-    const bridge = window.agentic;
-    let root: string | null | undefined;
-
-    if (bridge?.pickFolder) {
-      root = await bridge.pickFolder();
-      if (!root) return; // Cancelled.
-    } else {
-      root = window.prompt(
-        'Full path to the project folder\n\n(The native folder picker is only available in the desktop app.)',
-      );
-      if (!root) return;
-    }
-
-    const project = await run(() => api.openProject(root!), 'Project opened');
-    if (project) toast('info', `Working in ${project.name}`, project.root);
-  };
-
-  if (icon) {
-    return (
-      <button
-        type="button"
-        className="btn btn--ghost btn--icon"
-        title="Open another folder"
-        onClick={() => void pick()}
-      >
-        <IconPlus size={13} />
-      </button>
-    );
-  }
-  return (
-    <button type="button" className="btn btn--primary" onClick={() => void pick()}>
-      Open a folder
-    </button>
-  );
-}
+// `OpenFolderButton` moved to its own file when it grew a dialog; re-exported
+// here so the several call sites that already import it from the explorer keep
+// working.
+export { OpenFolderButton } from './OpenFolderDialog.js';

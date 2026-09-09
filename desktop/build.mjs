@@ -12,6 +12,9 @@ import { cpSync, mkdirSync, rmSync } from 'node:fs';
  * The native modules stay external: they are loaded from `node_modules` at
  * runtime (unpacked from the asar, see the `asarUnpack` config), because a
  * `.node` binary cannot be bundled into JavaScript.
+ *
+ * The two entry points get DIFFERENT settings, and that distinction is the
+ * whole reason this file is not a one-liner — see below.
  */
 
 rmSync('dist', { recursive: true, force: true });
@@ -23,21 +26,6 @@ const shared = {
   format: 'cjs',
   sourcemap: true,
   logLevel: 'info',
-  /**
-   * The server is ESM and uses `import.meta.url` to find its own directory.
-   * Electron's main process is CommonJS, where `import.meta` is empty — so
-   * without this, `fileURLToPath(import.meta.url)` throws the moment the
-   * server module loads and the app dies before it draws a window.
-   *
-   * Mapping it to the CJS `__filename` as a file URL is exact: every use of it
-   * in the server is `path.dirname(fileURLToPath(import.meta.url))`, which
-   * then yields the bundle's own directory — which is where the build puts
-   * the preview overlay it needs to read.
-   */
-  define: {
-    'import.meta.url': '__agenticModuleUrl',
-  },
-  inject: ['./module-url-shim.mjs'],
   external: [
     'electron',
     'node-pty',
@@ -50,16 +38,58 @@ const shared = {
   ],
 };
 
+/**
+ * The MAIN process only.
+ *
+ * The server is ESM and uses `import.meta.url` to find its own directory.
+ * Electron's main process is CommonJS, where `import.meta` is empty — so
+ * without this, `fileURLToPath(import.meta.url)` throws the moment the server
+ * module loads and the app dies before it draws a window.
+ *
+ * Mapping it to the CJS `__filename` as a file URL is exact: every use of it in
+ * the server is `path.dirname(fileURLToPath(import.meta.url))`, which yields
+ * the bundle's own directory — where the build puts the preview overlay it
+ * needs to read.
+ *
+ * This must NOT be applied to the preload. A sandboxed preload has no
+ * `__filename` and may only `require('electron')`, so the shim throws on its
+ * first line, the whole preload never runs, and `window.agentic` is silently
+ * undefined — which looks to a user like "Open a folder does nothing", with no
+ * error anywhere they would think to look. `scripts/check-preload.mjs` exists
+ * to catch exactly that.
+ */
 await build({
   ...shared,
   entryPoints: ['src/main.ts'],
   outfile: 'dist/main.cjs',
+  define: { 'import.meta.url': '__agenticModuleUrl' },
+  inject: ['./module-url-shim.mjs'],
 });
 
+/**
+ * The PRELOAD.
+ *
+ * Deliberately plain: no injected shim, no Node builtins, nothing but
+ * `require('electron')`. It runs sandboxed, and everything else is unavailable
+ * there.
+ */
 await build({
   ...shared,
   entryPoints: ['src/preload.ts'],
   outfile: 'dist/preload.cjs',
+});
+
+/**
+ * The IPC surface, emitted separately as well as bundled into main.
+ *
+ * `scripts/check-open-folder.mjs` registers the REAL handlers rather than a
+ * copy of them — a check that tests a reimplementation of the thing it is
+ * checking is worth nothing.
+ */
+await build({
+  ...shared,
+  entryPoints: ['src/ipc.ts'],
+  outfile: 'dist/ipc.cjs',
 });
 
 /**
