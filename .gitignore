@@ -15,3 +15,6 @@ test-results/
 .agentic-team/checkpoints/
 .agentic-team/index.db*
 web/public/monaco/
+
+# Local dev state, created by running the server outside the app.
+.devdata/

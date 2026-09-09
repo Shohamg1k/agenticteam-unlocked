@@ -5,8 +5,16 @@
   "description": "Agentic Team — a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=20.11" },
-  "workspaces": ["packages/*", "server", "web", "cli", "desktop"],
+  "engines": {
+    "node": ">=20.11"
+  },
+  "workspaces": [
+    "packages/*",
+    "server",
+    "web",
+    "cli",
+    "desktop"
+  ],
   "scripts": {
     "build": "npm run build -w @agentic/core && npm run build -w @agentic/server && npm run build -w @agentic/web",
     "dev": "node scripts/dev.mjs",
@@ -32,6 +40,7 @@
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.3",
-    "vitest": "^2.1.8"
+    "vite": "^6.4.3",
+    "vitest": "^3.2.7"
   }
 }

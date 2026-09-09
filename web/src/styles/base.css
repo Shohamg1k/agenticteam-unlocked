@@ -1,0 +1,246 @@
+/*
+ * Design tokens.
+ *
+ * Every colour in the app comes from a variable defined here. Four themes are
+ * four redefinitions of the same names — no component ever branches on theme,
+ * and adding one is a block in this file rather than a change anywhere else.
+ *
+ * The palette is deliberately low-chroma for surfaces and saturated only for
+ * state. In an IDE the user's own code is the content; chrome that competes
+ * with it is chrome that gets in the way.
+ */
+
+:root {
+  /* Surfaces, back to front. */
+  --bg-app: #16181d;
+  --bg-panel: #1c1f26;
+  --bg-elevated: #23262f;
+  --bg-input: #12141a;
+  --bg-hover: #2a2e39;
+  --bg-active: #323744;
+  --bg-selected: #2d3648;
+
+  /* Text. */
+  --fg: #e4e6eb;
+  --fg-muted: #9aa1ae;
+  --fg-subtle: #6b7280;
+  --fg-inverse: #16181d;
+
+  /* Lines. */
+  --border: #2a2e38;
+  --border-strong: #3a3f4d;
+  --focus-ring: #6366f1;
+
+  /* Brand and state. */
+  --accent: #6366f1;
+  --accent-hover: #7c7ff2;
+  --accent-fg: #ffffff;
+  --success: #3fb950;
+  --success-bg: rgba(63, 185, 80, 0.12);
+  --warning: #d29922;
+  --warning-bg: rgba(210, 153, 34, 0.12);
+  --danger: #f85149;
+  --danger-bg: rgba(248, 81, 73, 0.12);
+  --info: #58a6ff;
+  --info-bg: rgba(88, 166, 255, 0.12);
+
+  /* Diff. */
+  --diff-add-bg: rgba(63, 185, 80, 0.14);
+  --diff-add-fg: #7ee787;
+  --diff-remove-bg: rgba(248, 81, 73, 0.14);
+  --diff-remove-fg: #ffa198;
+
+  /* Per-tier provider colours, so the ladder is legible at a glance. */
+  --tier-local: #3fb950;
+  --tier-free: #58a6ff;
+  --tier-subscription: #a371f7;
+  --tier-byok: #d29922;
+
+  /* Type. */
+  --font-ui: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo, Consolas, monospace;
+  --text-xs: 11px;
+  --text-sm: 12px;
+  --text-base: 13px;
+  --text-md: 14px;
+  --text-lg: 16px;
+  --text-xl: 20px;
+
+  /* Spacing — a 4px scale. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --radius-sm: 4px;
+  --radius: 6px;
+  --radius-lg: 10px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.45);
+
+  /* Layout. */
+  --rail-width: 48px;
+  --sidebar-width: 280px;
+  --tabstrip-height: 35px;
+  --statusbar-height: 24px;
+
+  color-scheme: dark;
+}
+
+[data-theme='light'] {
+  --bg-app: #ffffff;
+  --bg-panel: #f6f7f9;
+  --bg-elevated: #ffffff;
+  --bg-input: #ffffff;
+  --bg-hover: #ebedf0;
+  --bg-active: #e1e4e8;
+  --bg-selected: #dbe4f0;
+
+  --fg: #1f2328;
+  --fg-muted: #57606a;
+  --fg-subtle: #8b949e;
+  --fg-inverse: #ffffff;
+
+  --border: #d8dce1;
+  --border-strong: #bcc3cb;
+
+  --success: #1a7f37;
+  --success-bg: rgba(26, 127, 55, 0.1);
+  --warning: #9a6700;
+  --warning-bg: rgba(154, 103, 0, 0.1);
+  --danger: #cf222e;
+  --danger-bg: rgba(207, 34, 46, 0.1);
+  --info: #0969da;
+  --info-bg: rgba(9, 105, 218, 0.1);
+
+  --diff-add-bg: rgba(26, 127, 55, 0.12);
+  --diff-add-fg: #116329;
+  --diff-remove-bg: rgba(207, 34, 46, 0.12);
+  --diff-remove-fg: #a40e26;
+
+  --tier-local: #1a7f37;
+  --tier-free: #0969da;
+  --tier-subscription: #8250df;
+  --tier-byok: #9a6700;
+
+  --shadow-sm: 0 1px 2px rgba(31, 35, 40, 0.08);
+  --shadow: 0 4px 12px rgba(31, 35, 40, 0.12);
+  --shadow-lg: 0 12px 32px rgba(31, 35, 40, 0.16);
+
+  color-scheme: light;
+}
+
+/*
+ * High contrast. Not a darker dark theme: pure black and white with saturated
+ * state colours, and every border made visible, because the low-chroma borders
+ * that read as "quiet" in the default theme read as "absent" to a user who
+ * needs contrast.
+ */
+[data-theme='high-contrast'] {
+  --bg-app: #000000;
+  --bg-panel: #000000;
+  --bg-elevated: #0a0a0a;
+  --bg-input: #000000;
+  --bg-hover: #1f1f1f;
+  --bg-active: #2f2f2f;
+  --bg-selected: #003a6b;
+
+  --fg: #ffffff;
+  --fg-muted: #d0d0d0;
+  --fg-subtle: #a0a0a0;
+
+  --border: #6e6e6e;
+  --border-strong: #ffffff;
+  --focus-ring: #ffff00;
+
+  --accent: #4d8ff5;
+  --accent-hover: #6ea3f7;
+  --success: #23d160;
+  --warning: #ffdd57;
+  --danger: #ff4d4d;
+  --info: #4d8ff5;
+
+  color-scheme: dark;
+}
+
+/* ------------------------------------------------------------------------ */
+/* Reset                                                                     */
+/* ------------------------------------------------------------------------ */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg-app);
+  color: var(--fg);
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+  color: inherit;
+}
+
+/* Every interactive element gets a visible focus ring. A focus style removed
+ * for aesthetics is an app that cannot be used without a mouse. */
+:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+::selection {
+  background: var(--bg-selected);
+}
+
+/* Scrollbars: present enough to grab, quiet enough to ignore. */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 5px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--fg-subtle);
+  background-clip: content-box;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
