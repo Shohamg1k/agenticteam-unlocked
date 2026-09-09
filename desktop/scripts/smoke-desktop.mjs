@@ -78,6 +78,31 @@ fs.writeFileSync(
 
 console.log('\nLaunching the desktop app...\n');
 
+/**
+ * A third project: a Node app that has never been installed.
+ *
+ * This is the shape every generated Express or MERN project has — a
+ * package.json with real dependencies and no node_modules — and the shape
+ * whose dev server used to die on its first `require`, reported to the user
+ * as "the dev server exited with code 1".
+ */
+const nodeProject = fs.mkdtempSync(path.join(os.tmpdir(), 'agentic-desktop-node-'));
+fs.writeFileSync(
+  path.join(nodeProject, 'package.json'),
+  JSON.stringify({ name: 'smoke-node', version: '1.0.0', dependencies: { 'sirv-cli': '^2.0.2' } }, null, 2),
+);
+fs.writeFileSync(
+  path.join(nodeProject, 'server.js'),
+  [
+    "const http = require('http');",
+    'const PORT = 4599;',
+    'http.createServer((req, res) => {',
+    "  res.writeHead(200, { 'content-type': 'text/html' });",
+    "  res.end('<html><body><h1 id=\"served\">Served by Node</h1></body></html>');",
+    "}).listen(PORT, () => console.log('Server running on port ' + PORT));",
+  ].join('\n'),
+);
+
 const app = await electron.launch({
   args: ['dist/main.cjs'],
   cwd: desktopRoot,
@@ -317,6 +342,48 @@ try {
   // -------------------------------------------------------------------------
   console.log('\nThe rest of the shell');
 
+  // -------------------------------------------------------------------------
+  console.log('\nA Node project that has never been installed');
+
+  await step('it installs the dependencies and runs the app', async () => {
+    const opened = await api('/projects/open', { root: nodeProject });
+    assert(opened?.id, 'the Node project did not open');
+    await api(`/projects/${opened.id}/activate`, {});
+
+    const snapshot = await api('/snapshot', null);
+    const capability = snapshot.previews.find((p) => p.projectId === opened.id);
+    assert(capability?.mode === 'dev-server', `expected a dev-server project, got ${capability?.mode}`);
+    // No `dev` or `start` script. A bare server.js is what a generated Express
+    // app frequently is, and refusing to preview one is a technicality the user
+    // would have to solve on our behalf.
+    assert(/node server\.js/.test(capability.command ?? ''), `command was "${capability.command}"`);
+
+    const preview = await api('/preview/start', { projectId: opened.id });
+    assert(
+      preview.status === 'running',
+      `the preview did not start: ${(preview.error ?? '').slice(0, 300)}`,
+    );
+
+    // Fetched from Node, not from the renderer. The app shows a preview in an
+    // IFRAME, which is same-document-policy-free; a cross-origin fetch from the
+    // renderer to the proxy is blocked by CORS and would be testing a
+    // restriction the product never runs into.
+    const body = await fetch(preview.url).then((res) => res.text());
+    assert(body.includes('Served by Node'), `the proxied page was: ${body.slice(0, 200)}`);
+
+    // The port came from the server's own "Server running on port 4599" rather
+    // than from a guess, which would have been 3000 and would have found either
+    // nothing or somebody else's application.
+    assert(
+      (preview.detectedUrl ?? '').includes('4599'),
+      `the port was not read from the server's own output: ${preview.detectedUrl}`,
+    );
+
+    await api('/preview/stop', { projectId: opened.id });
+    await api(`/projects/${projectId}/activate`, {});
+    return `installed, started, and proxied ${preview.detectedUrl}`;
+  });
+
   await step('the terminal opens and actually runs a command', async () => {
     const created = await api('/terminals', { projectId, cwd: project });
     assert(created?.id, 'no terminal was created');
@@ -388,6 +455,7 @@ try {
   await app.close().catch(() => undefined);
   fs.rmSync(project, { recursive: true, force: true });
   fs.rmSync(brokenProject, { recursive: true, force: true });
+  fs.rmSync(nodeProject, { recursive: true, force: true });
 }
 
 console.log(`\n${'='.repeat(70)}`);

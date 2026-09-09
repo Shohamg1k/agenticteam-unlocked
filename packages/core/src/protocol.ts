@@ -122,6 +122,15 @@ export interface PreviewState {
   /** Which kind of preview this is. Drives the button's label and behaviour. */
   mode?: PreviewMode;
   /**
+   * What it is doing right now, while `status` is 'starting'.
+   *
+   * Starting a generated project can mean a multi-minute dependency install
+   * before anything can listen on a port. Without this the UI shows a spinner
+   * that looks identical to being stuck, and the honest difference between
+   * "installing 400 packages" and "hung" is the whole message.
+   */
+  statusDetail?: string;
+  /**
    * Static mode: the HTML file being served, relative to the project root.
    * This is what makes the preview open the user's page rather than a
    * directory listing.

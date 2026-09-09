@@ -78,6 +78,30 @@ describe('parseDevServerUrl', () => {
   });
 });
 
+describe('parseDevServerUrl, when the server announces a port rather than a URL', () => {
+  it('reads the port out of prose', () => {
+    // `app.listen(3000, () => console.log('Server running on port 3000'))` is
+    // the first thing anyone writes and the first thing a model generates.
+    // Without this the preview waited out its full timeout on a guessed port
+    // while the server sat there working perfectly.
+    expect(portOf(parseDevServerUrl('Server running on port 3000')!)).toBe(3000);
+    expect(portOf(parseDevServerUrl('Listening on port 4001')!)).toBe(4001);
+    expect(portOf(parseDevServerUrl('app listening at :8080')!)).toBe(8080);
+    expect(portOf(parseDevServerUrl('Server started on port 5000')!)).toBe(5000);
+  });
+
+  it('does not mistake a duration, a count or a version for a port', () => {
+    expect(parseDevServerUrl('compiled successfully in 1200 ms')).toBeUndefined();
+    expect(parseDevServerUrl('Loaded 3000 records from cache')).toBeUndefined();
+    expect(parseDevServerUrl('webpack 5.90.0 compiled')).toBeUndefined();
+  });
+
+  it('still prefers a real URL when there is one', () => {
+    const output = ['Server running on port 3000', '  Local: http://localhost:5174/'].join('\n');
+    expect(portOf(parseDevServerUrl(output)!)).toBe(5174);
+  });
+});
+
 describe('findHtmlFiles', () => {
   const withTree = <T>(tree: Record<string, string>, fn: (root: string) => T): T => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentic-html-'));

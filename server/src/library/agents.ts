@@ -400,7 +400,7 @@ comment the reason and the measurement that justified it.`,
   agent(
     'accessibility-engineer',
     'Interfaces that work by keyboard and screen reader',
-    'Accessibility, a11y, WCAG, screen reader, ARIA, assistive technology, contrast ratio, focus order, tab order',
+    'Accessibility, accessible, a11y, WCAG, screen reader, ARIA, assistive technology, contrast ratio, focus order, tab order',
     'frontend',
     'qa-engineer',
     ['accessible-by-construction', 'ui-that-looks-designed'],

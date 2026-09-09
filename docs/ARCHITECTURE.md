@@ -206,6 +206,35 @@ imports one. The desktop app already ships Chromium and registers it at boot;
 a development checkout falls back to Playwright; an installation with neither
 reports the check as SKIPPED with a reason, never as passed.
 
+## Running what was built
+
+A generated project has never been installed. It is a `package.json`, some
+source, and no `node_modules` — so its dev server dies on the first `require`,
+and the preview used to report "the dev server exited with code 1", which is
+true and useless. Pressing the button that is supposed to run your new Express
+or MERN app did nothing but produce an error.
+
+So starting a preview installs first, with the project's own package manager
+(the lockfile decides), and says what it is doing while it happens. A
+multi-minute install and a hang look identical behind a spinner, and the
+difference is the whole message.
+
+Finding the server is evidence-driven at every step:
+
+| Question | Answer |
+| -------- | ------ |
+| What runs it? | A `dev`/`start`/`serve` script; failing that a bare `server.js`, `app.js` or `index.js`, because a generated Express app frequently has no script at all. Django, Flask and FastAPI are detected from `manage.py` and what the entry file imports; Go from `main.go`. |
+| Which port? | The URL the server printed. Failing that, a port it announced in prose — `Server running on port 3000` is the first thing anyone writes. Failing that, the framework guess. |
+| Is that port ours? | Only if it was NOT already listening before we started. A port already in use belongs to somebody else, and proxying to it showed a stranger's application in the user's preview. |
+
+The visual check does not run on a project that serves its own pages. Reading an
+Express app's templates off disk answers a question nobody asked: static assets
+are mounted, templates are compiled, and routes are not files. It once called a
+correct login app broken because `/style.css` — served by Express from `public/`
+— was a 404 to a plain file server, and burned the task's three attempts on a
+defect that was entirely in the check. Those projects are covered by **Check
+layout**, which audits the app actually running.
+
 ## How hard a task tries
 
 Routing decides WHO runs a task. A profile decides how hard they try, and it is

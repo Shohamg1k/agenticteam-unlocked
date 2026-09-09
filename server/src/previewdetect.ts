@@ -117,7 +117,7 @@ export function shouldServeStatically(opts: { hasDevServer: boolean; htmlFiles: 
  */
 export function parseDevServerUrl(output: string): string | undefined {
   const urls = [...output.matchAll(/https?:\/\/[^\s"'<>()[\]]+/gi)].map((m) => m[0]);
-  if (!urls.length) return undefined;
+  if (!urls.length) return portOnlyUrl(output);
 
   const cleaned = urls
     .map((u) => u.replace(/[.,;:]+$/, ''))
@@ -131,7 +131,7 @@ export function parseDevServerUrl(output: string): string | undefined {
       }
     });
 
-  if (!cleaned.length) return undefined;
+  if (!cleaned.length) return portOnlyUrl(output);
 
   const loopback = cleaned.filter((u) => {
     try {
@@ -154,6 +154,36 @@ export function parseDevServerUrl(output: string): string | undefined {
   } catch {
     return chosen;
   }
+}
+
+/**
+ * The port from a line that mentions one without a URL.
+ *
+ * `app.listen(3000, () => console.log('Server running on port 3000'))` is the
+ * first thing anyone writes and the first thing a model generates, and it
+ * announces the port in prose. Without this the preview waited out its full
+ * timeout on a guessed port while the server sat there working perfectly.
+ *
+ * Only phrasings that actually mean "this is where I am listening" — a bare
+ * four-digit number in a log line is far more likely to be a duration, a byte
+ * count or a version than a port.
+ */
+function portOnlyUrl(output: string): string | undefined {
+  const patterns = [
+    /\blisten(?:ing)?\s+(?:on|at)\s+(?:port\s+)?:?(\d{2,5})\b/i,
+    /\b(?:running|started|available|ready)\s+(?:on|at)\s+(?:port\s+)?:?(\d{2,5})\b/i,
+    /\bport[:\s]+(\d{2,5})\b/i,
+  ];
+
+  for (const pattern of patterns) {
+    // The LAST match: a server that retried a busy port announces the winner
+    // last, exactly as with a URL.
+    const matches = [...output.matchAll(new RegExp(pattern.source, `${pattern.flags}g`))];
+    const found = matches.at(-1)?.[1];
+    const port = found ? Number(found) : NaN;
+    if (port >= 1 && port <= 65_535) return `http://127.0.0.1:${port}/`;
+  }
+  return undefined;
 }
 
 function isLoopback(hostname: string): boolean {

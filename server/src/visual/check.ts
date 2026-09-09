@@ -2,6 +2,7 @@ import path from 'node:path';
 import type { FileArtifact, VerificationCheck, VerificationIssue } from '@agentic/core';
 import { startStaticServer } from '../staticserver.js';
 import { findHtmlFiles } from '../previewdetect.js';
+import { profileProject } from '../projects.js';
 import { auditUrl } from './renderer.js';
 import type { PageAudit } from './renderer.js';
 import { describeError, log } from '../log.js';
@@ -104,6 +105,31 @@ export async function runVisualCheck(opts: VisualCheckOptions): Promise<VisualCh
 
   if (!touchesSomethingVisual(opts.files)) {
     return skipped('Not run: this task produced nothing that changes what a page looks like.');
+  }
+
+  /**
+   * Only render what a file server can honestly render.
+   *
+   * This guard exists because its absence destroyed a correct application. A
+   * task built an Express login app — package.json, server.js, views/login.html
+   * serving `/style.css` out of `public/`. The check served the project as a
+   * folder of files, so `/style.css` was a 404, the check called the page
+   * broken, and three attempts and the whole task were lost to a defect that
+   * was entirely in the check.
+   *
+   * An app that serves its own pages decides what its URLs mean: static assets
+   * are mounted, templates are compiled, routes are not files. Reading its
+   * templates off disk answers a question nobody asked. The manual "Check
+   * layout" action still covers these projects, because there the app itself is
+   * running and the URL is real.
+   */
+  const profile = profileProject(opts.root);
+  if (profile.devServer) {
+    return skipped(
+      `Not run: this project serves its own pages (\`${profile.devServer.command}\`), so its ` +
+        'templates cannot be rendered as plain files. Start the preview and use Check layout ' +
+        'to audit the running app.',
+    );
   }
 
   const pages = pagesToAudit(opts.files, opts.root);

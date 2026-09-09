@@ -265,6 +265,27 @@ export function selectAgent(
   const ranked = candidates
     .map((agent): AgentMatch => {
       const about = `${agent.name} ${agent.whenToUse}`;
+      const fromTitle = overlapScore(titleTerms, about) + overlapScore(titleTerms, agent.description);
+
+      /**
+       * A specialist has to be recognisable from what the task IS.
+       *
+       * The description is detail, and detail mentions things in passing. A
+       * task titled "Build Node.js login page app" was given to the Rust, Go
+       * and C++ specialist because its brief said the user store was
+       * "in-memory" — three incidental words in a long paragraph, no signal
+       * from the title at all, and it scored just over the line. It then spent
+       * three attempts and failed.
+       *
+       * So the description can strengthen a match; it cannot make one. The
+       * exception is a profile that IS the task's assigned role, which the
+       * planner chose deliberately and which needs no keyword evidence.
+       */
+      const roleAssigned = Boolean(task.role) && agent.role === task.role;
+      if (!fromTitle && !roleAssigned) {
+        return { agent, score: 0, reason: 'nothing in the task title matches it' };
+      }
+
       const relevance =
         overlapScore(titleTerms, about) * 3 +
         overlapScore(bodyTerms, about) * 1 +

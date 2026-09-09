@@ -267,10 +267,22 @@ export function profileProject(root: string): ProjectProfile {
     const devScript = pick('dev', 'start', 'serve');
     if (devScript) {
       profile.devServer = { command: run(devScript), port: guessDevPort(profile.frameworks) };
+    } else {
+      // No script, but a server all the same. A generated Express app is
+      // frequently a package.json with dependencies and a server.js, and
+      // nothing else — refusing to preview it because the author did not think
+      // to add a `start` script is a technicality the user has to solve for us.
+      const entry = ['server.js', 'app.js', 'index.js', 'main.js', 'src/server.js', 'src/index.js'].find(
+        (candidate) => fs.existsSync(path.join(root, candidate)),
+      );
+      if (entry) {
+        profile.devServer = { command: `node ${entry}`, port: guessDevPort(profile.frameworks) };
+      }
     }
   } else if (
     fs.existsSync(path.join(root, 'pyproject.toml')) ||
-    fs.existsSync(path.join(root, 'requirements.txt'))
+    fs.existsSync(path.join(root, 'requirements.txt')) ||
+    fs.existsSync(path.join(root, 'manage.py'))
   ) {
     profile.ecosystem = 'python';
     profile.checks = {
@@ -280,12 +292,48 @@ export function profileProject(root: string): ProjectProfile {
           : undefined,
       lint: fs.existsSync(path.join(root, 'ruff.toml')) ? 'ruff check .' : undefined,
     };
+
+    /**
+     * Python web apps, in the order they are worth guessing.
+     *
+     * Django is unambiguous — `manage.py` exists or it does not. Flask and
+     * FastAPI are told apart by what the entry file imports, because both are
+     * a single module with an `app` in it and the run command differs
+     * completely between them.
+     *
+     * No virtualenv is created or activated. Doing that well means owning
+     * Python environments, which is a project of its own, so the command runs
+     * against whatever `python` is on PATH and a missing dependency surfaces as
+     * the dev server's own error rather than as something invented here.
+     */
+    if (fs.existsSync(path.join(root, 'manage.py'))) {
+      profile.frameworks.push('Django');
+      profile.devServer = { command: 'python manage.py runserver', port: 8000 };
+    } else {
+      const entry = ['main.py', 'app.py', 'server.py', 'src/main.py', 'app/main.py'].find((candidate) =>
+        fs.existsSync(path.join(root, candidate)),
+      );
+      if (entry) {
+        const source = readTextFile(path.join(root, entry));
+        const moduleName = entry.replace(/\.py$/, '').split(/[\\/]/).join('.');
+        if (/\bfrom\s+fastapi\b|\bimport\s+fastapi\b/.test(source)) {
+          profile.frameworks.push('FastAPI');
+          profile.devServer = { command: `uvicorn ${moduleName}:app --reload --port 8000`, port: 8000 };
+        } else if (/\bfrom\s+flask\b|\bimport\s+flask\b/i.test(source)) {
+          profile.frameworks.push('Flask');
+          profile.devServer = { command: `python ${entry}`, port: 5000 };
+        }
+      }
+    }
   } else if (fs.existsSync(path.join(root, 'Cargo.toml'))) {
     profile.ecosystem = 'rust';
     profile.checks = { typecheck: 'cargo check', test: 'cargo test', build: 'cargo build' };
   } else if (fs.existsSync(path.join(root, 'go.mod'))) {
     profile.ecosystem = 'go';
     profile.checks = { typecheck: 'go vet ./...', test: 'go test ./...', build: 'go build ./...' };
+    if (fs.existsSync(path.join(root, 'main.go'))) {
+      profile.devServer = { command: 'go run .', port: 8080 };
+    }
   }
 
   // Explicit settings always win over detection.
@@ -293,6 +341,15 @@ export function profileProject(root: string): ProjectProfile {
   if (settings?.devServer) profile.devServer = settings.devServer;
 
   return profile;
+}
+
+/** Read a small source file, or nothing. Used only to tell frameworks apart. */
+function readTextFile(file: string): string {
+  try {
+    return fs.readFileSync(file, 'utf8').slice(0, 8_000);
+  } catch {
+    return '';
+  }
 }
 
 function guessDevPort(frameworks: string[]): number {

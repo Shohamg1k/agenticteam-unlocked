@@ -15,6 +15,7 @@ import { profileProject } from './projects.js';
 import { changed, projectState } from './store.js';
 import { describeError, log } from './log.js';
 import { startStaticServer } from './staticserver.js';
+import { installDependencies } from './install.js';
 import type { StaticServer } from './staticserver.js';
 import {
   findHtmlFiles,
@@ -240,6 +241,47 @@ async function startDevServerPreview(
   previews.set(projectId, preview);
   changed();
 
+  /**
+   * Install first, if the project has never been installed.
+   *
+   * A generated project is a package.json and some source: `npm install` has
+   * never been run on it, so its dev server dies on the first `require` and the
+   * preview reported "the dev server exited with code 1". True, useless, and
+   * the reason a freshly-built Express or MERN app looked broken the moment you
+   * pressed the button that was supposed to run it.
+   */
+  const install = await installDependencies({
+    root,
+    onOutput: (text) => {
+      preview.output.push(text);
+      if (preview.output.length > 200) preview.output.splice(0, preview.output.length - 200);
+      // The last non-empty line, so the UI can show progress rather than a
+      // spinner that is indistinguishable from being stuck.
+      const line = text.split(/\r?\n/).filter(Boolean).at(-1);
+      if (line) preview.state.statusDetail = `Installing dependencies — ${line.slice(0, 90)}`;
+      changed();
+    },
+  });
+
+  if (!install.ok) {
+    preview.state.status = 'failed';
+    preview.state.statusDetail = undefined;
+    preview.state.error = [
+      'The dependencies could not be installed, so the dev server was not started.',
+      '',
+      install.output.slice(-2_000),
+    ].join('\n');
+    changed();
+    return preview.state;
+  }
+
+  if (!install.skipped) {
+    log(`Installed dependencies in ${Math.round(install.durationMs / 1000)}s`, 'info', { projectId });
+  }
+
+  preview.state.statusDetail = `Starting ${command}…`;
+  changed();
+
   const child = spawn(command, {
     cwd: root,
     shell: true,
@@ -277,10 +319,30 @@ async function startDevServerPreview(
     }
   });
 
+  /**
+   * Was the guessed port ALREADY taken before we started?
+   *
+   * If it was, whatever is listening there belongs to somebody else, and
+   * treating it as evidence that our dev server came up means proxying the
+   * user's preview at a stranger's application. That is not hypothetical: it
+   * showed a completely unrelated app in the preview while the real one was
+   * still starting.
+   *
+   * Checked before the spawn, because afterwards the two are indistinguishable.
+   */
+  const guessedPortWasTaken = await isPortOpen(guessedPort);
+  if (guessedPortWasTaken) {
+    log(
+      `Port ${guessedPort} was already in use before starting, so it will not be used to detect this dev server`,
+      'warn',
+      { projectId },
+    );
+  }
+
   // Wait for a server to answer. What we wait FOR changes as we learn: the
   // moment the dev server prints its URL, that port is the one that matters and
   // the guess is abandoned.
-  const target = await waitForDevServer(preview, guessedPort, 90_000);
+  const target = await waitForDevServer(preview, guessedPortWasTaken ? undefined : guessedPort, 90_000);
 
   if (!target) {
     preview.state.status = 'failed';
@@ -288,8 +350,12 @@ async function startDevServerPreview(
       'The dev server did not start listening within 90 seconds.',
       preview.state.detectedUrl
         ? `It said it was on ${preview.state.detectedUrl}, but nothing answered there.`
-        : `Nothing in its output looked like a URL, and port ${guessedPort} stayed closed. ` +
-          'Set the right port in Project settings.',
+        : guessedPortWasTaken
+          ? `Nothing in its output said which port it is on, and port ${guessedPort} was already ` +
+            'in use by something else before it started, so that could not be used to find it. ' +
+            'Set the right port in Project settings.'
+          : `Nothing in its output looked like a URL, and port ${guessedPort} stayed closed. ` +
+            'Set the right port in Project settings.',
       '',
       preview.output.join('').slice(-1_500),
     ].join('\n');
@@ -300,6 +366,7 @@ async function startDevServerPreview(
   const proxyPort = await findFreePort(target.port + 1);
   preview.proxy = createProxy(target.port, proxyPort, projectId);
   preview.state.status = 'running';
+  preview.state.statusDetail = undefined;
   preview.state.port = proxyPort;
   // Keep the path the dev server asked for: a project with a base path serves
   // nothing at the root, and an iframe pointed there shows its own 404 page.
@@ -322,7 +389,8 @@ async function startDevServerPreview(
  */
 async function waitForDevServer(
   preview: PreviewProcess,
-  guessedPort: number,
+  /** Undefined when the guess cannot be trusted — see the caller. */
+  guessedPort: number | undefined,
   timeoutMs: number,
 ): Promise<{ port: number; path: string } | undefined> {
   const deadline = Date.now() + timeoutMs;
@@ -334,7 +402,7 @@ async function waitForDevServer(
     if (announcedPort && (await isPortOpen(announcedPort))) {
       return { port: announcedPort, path: announced ? pathOf(announced) : '/' };
     }
-    if (await isPortOpen(guessedPort)) {
+    if (guessedPort !== undefined && (await isPortOpen(guessedPort))) {
       return { port: guessedPort, path: '/' };
     }
     if (preview.state.status === 'failed') return undefined;
