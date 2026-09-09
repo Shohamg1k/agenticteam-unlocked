@@ -28,9 +28,12 @@ jobs:
           node-version: 22
           cache: npm
 
-      # The native modules are optional by design (the app degrades without
-      # them), and building them here would triple install time for no signal.
-      - run: npm ci --no-audit --no-fund --omit=optional
+      # A plain install. `--omit=optional` looks tempting here because this
+      # app's native modules are optional — but it also strips rollup's
+      # platform binary, which Vite and Vitest need, so the whole toolchain
+      # dies. npm not failing when node-pty cannot build is what "optional"
+      # already buys us.
+      - run: npm ci --no-audit --no-fund
 
       # Workspaces import each other through their build output, so the
       # dependencies have to exist before anything can be typechecked:
@@ -43,6 +46,15 @@ jobs:
       - run: npx eslint .
       - run: npx prettier --check "**/*.{ts,tsx,json,css}"
       - run: npx vitest run --coverage
+
+      # The app must build and run without its optional native modules —
+      # terminals fall back to a piped shell, the vault to an encrypted file.
+      # Removing just those two proves it, without taking the toolchain's own
+      # platform binaries with it.
+      - name: Optional native modules stay optional
+        run: |
+          rm -rf node_modules/node-pty node_modules/@napi-rs
+          npm run typecheck -w @agentic/server
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -67,7 +79,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci --no-audit --no-fund --omit=optional
+      - run: npm ci --no-audit --no-fund
 
       # Proves the whole thing compiles and bundles on every target platform —
       # the Electron main bundle in particular, which is where a Node-only API
@@ -91,7 +103,7 @@ jobs:
           node-version: 22
           cache: npm
 
-      - run: npm ci --no-audit --no-fund --omit=optional
+      - run: npm ci --no-audit --no-fund
       - run: npm run build -w @agentic/core
 
       - run: npx playwright install chromium --with-deps

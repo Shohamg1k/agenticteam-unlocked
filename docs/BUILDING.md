@@ -101,8 +101,11 @@ use.
 - without the keychain, secrets go to an encrypted file under the app-data
   directory, and Settings reports which backend is active.
 
-CI installs with `--omit=optional` deliberately, which means the degraded paths
-are exercised on every run rather than only when something breaks.
+CI verifies this rather than assuming it: after the normal test run it removes
+those two modules and typechecks the server again. (Installing with
+`--omit=optional` would be the obvious way to test it and is a trap — it also
+strips rollup's platform binary, which Vite and Vitest need, so the toolchain
+dies before it can tell you anything.)
 
 ## Testing
 
