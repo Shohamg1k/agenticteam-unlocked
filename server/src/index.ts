@@ -341,9 +341,25 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
   return { port: PORT, close };
 }
 
-// Started directly (`npm run dev -w @agentic/server`) rather than embedded in
-// the desktop shell.
-const isMain = process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
+/**
+ * Was this module run directly, rather than imported by the desktop shell?
+ *
+ * The Electron check is not belt-and-braces, it is the load-bearing half. This
+ * file is bundled into the desktop main process, where `import.meta.url` is
+ * shimmed to the bundle's own path — so launching the app as
+ * `electron dist/main.cjs`, which is exactly what a test harness and several
+ * packaging setups do, made this comparison TRUE and started a second copy of
+ * the service inside the app that was already running one. The visible symptom
+ * was the app reporting that another copy was running, when the other copy was
+ * itself, and then quitting.
+ *
+ * Nothing embedded should ever self-start from argv. Under Electron this is
+ * always an import; the standalone path is plain node.
+ */
+const isMain =
+  !process.versions.electron &&
+  process.argv[1] &&
+  fileURLToPath(import.meta.url) === path.resolve(process.argv[1]);
 if (isMain) {
   let closer: (() => Promise<void>) | undefined;
 

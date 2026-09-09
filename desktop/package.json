@@ -11,8 +11,9 @@
     "package": "node build.mjs && electron-builder",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "check:preload": "electron scripts/check-preload.mjs",
-    "verify": "node build.mjs && npm run check:preload && npm run check:open-folder",
-    "check:open-folder": "electron scripts/check-open-folder.mjs"
+    "verify": "node build.mjs && npm run check:preload && npm run check:open-folder && npm run smoke",
+    "check:open-folder": "electron scripts/check-open-folder.mjs",
+    "smoke": "node scripts/smoke-desktop.mjs"
   },
   "dependencies": {
     "@agentic/server": "*"

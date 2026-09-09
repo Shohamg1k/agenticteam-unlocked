@@ -27,27 +27,57 @@ let mainWindow: BrowserWindow | null = null;
 let stopServer: (() => Promise<void>) | undefined;
 
 /**
+ * The running service, so a second caller joins it rather than racing it.
+ *
+ * There are two callers — boot, and the `activate` handler that rebuilds a
+ * window after the last one closes — and nothing stopped the second one
+ * binding the port the first had already taken. The symptom was the app
+ * telling the user another copy was running when the other copy was itself,
+ * and then quitting. Holding the promise rather than a flag matters: the two
+ * calls can overlap, and a flag set after the await is a flag set too late.
+ */
+let coreService: Promise<number> | undefined;
+
+/**
  * Start the core service in this process.
  *
  * In-process rather than a child process on purpose: a child would need
  * supervision, a shutdown protocol, and a story for what happens when the app
  * is killed while it is mid-write. Sharing the process means the service dies
  * exactly when the app does.
+ *
+ * Idempotent: calling it while it is already running, or already starting,
+ * returns the same port.
  */
 async function startCoreService(): Promise<number> {
-  const server = (await import('@agentic/server')) as {
-    startServer: () => Promise<{ port: number; close: () => Promise<void> }>;
-    registerVisualRenderer: (renderer: ReturnType<typeof createElectronRenderer>) => void;
-  };
+  coreService ??= (async () => {
+    const server = (await import('@agentic/server')) as {
+      startServer: () => Promise<{ port: number; close: () => Promise<void> }>;
+      registerVisualRenderer: (renderer: ReturnType<typeof createElectronRenderer>) => void;
+    };
 
-  // Hand the service a browser before it starts, so the very first task can be
-  // checked visually. This app already ships Chromium; the service must never
-  // import Electron itself, or running it headless would need one too.
-  server.registerVisualRenderer(createElectronRenderer());
+    // Hand the service a browser before it starts, so the very first task can
+    // be checked visually. This app already ships Chromium; the service must
+    // never import Electron itself, or running it headless would need one too.
+    server.registerVisualRenderer(createElectronRenderer());
 
-  const { port, close } = await server.startServer();
-  stopServer = close;
-  return port;
+    const { port, close } = await server.startServer();
+    stopServer = async () => {
+      // Forget it on the way down, so a restart in the same process can start
+      // cleanly rather than handing back a port nothing is listening on.
+      coreService = undefined;
+      await close();
+    };
+    return port;
+  })();
+
+  try {
+    return await coreService;
+  } catch (err) {
+    // A failed start must not be cached, or every retry returns the failure.
+    coreService = undefined;
+    throw err;
+  }
 }
 
 function resolveRendererIndex(): string | undefined {

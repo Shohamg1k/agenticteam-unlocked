@@ -46,6 +46,12 @@ export function createElectronRenderer(): {
         show: false,
         width: opts.width,
         height: opts.height,
+        // Size the PAGE, not the window. Without this the frame is subtracted
+        // from the viewport and a check asked to render at 390x844 renders at
+        // whatever is left — which for a check whose entire job is measuring a
+        // layout at a given width is not a rounding error, it is the wrong
+        // measurement. Asked for 1280x900, a framed window gave 1266x690.
+        useContentSize: true,
         webPreferences: {
           // No preload, no node, no shared session: this window exists to draw
           // one page and hand back one value.

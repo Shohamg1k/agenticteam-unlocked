@@ -27,10 +27,17 @@ import { describeError, log } from '../log.js';
  * cannot see it.
  */
 
-/** Widths worth rendering at. Phone first: it is where layouts break. */
-const VIEWPORTS: { width: number; height: number; label: string }[] = [
-  { width: 390, height: 844, label: 'a phone' },
-  { width: 1280, height: 900, label: 'a desktop' },
+/**
+ * Widths worth rendering at. Phone first: it is where layouts break.
+ *
+ * The height is a request rather than a promise. A renderer backed by a real
+ * window is clamped by the screen work area and by display scaling, so 844 can
+ * come back as 716 — which does not matter, because every check here depends on
+ * the WIDTH. What is below the fold is not what makes a layout wrong.
+ */
+const VIEWPORTS: { width: number; height: number }[] = [
+  { width: 390, height: 844 },
+  { width: 1280, height: 900 },
 ];
 
 /** Extensions whose change can alter what a page looks like. */
@@ -145,7 +152,10 @@ export async function runVisualCheck(opts: VisualCheckOptions): Promise<VisualCh
         }
 
         audits.push(audit);
-        issues.push(...issuesFrom(audit, page, viewport.label));
+        // The width the page ACTUALLY got, not the one asked for. A repair
+        // brief that says "at 390px wide" can be acted on; one that says "on a
+        // phone" leaves the agent guessing which phone.
+        issues.push(...issuesFrom(audit, page, `${audit.viewport.width}px wide`));
       }
       if (unavailable) break;
     }
@@ -174,7 +184,7 @@ export async function runVisualCheck(opts: VisualCheckOptions): Promise<VisualCh
  * Turn one page's audit into verification issues.
  *
  * The viewport is named in the message rather than kept as metadata, because a
- * repair prompt that says "at a phone width" is actionable and one that says
+ * repair prompt that says "at 390px wide" is actionable and one that says
  * "overflow detected" sends the agent looking at the desktop layout.
  */
 function issuesFrom(audit: PageAudit, page: string, viewport: string): VerificationIssue[] {
