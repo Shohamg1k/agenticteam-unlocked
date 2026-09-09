@@ -539,7 +539,7 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
       codeMap: run.codeMap,
     });
 
-    const decision = routeTask({
+    let decision = routeTask({
       projectId: run.projectId,
       task,
       contextTokens: pack.totalTokens,
@@ -548,16 +548,52 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
     });
 
     if (!decision.chosen) {
-      task.status = 'failed';
-      task.error =
+      // Nothing left after excluding what has already been tried. If the task
+      // still has attempts, fall back to re-routing WITHOUT the exclusions
+      // rather than giving up — most people have one provider connected, and
+      // retiring it after two failures would strand every task that needed a
+      // third attempt. A provider that is genuinely out of quota is still
+      // skipped, because its cooldown makes it ineligible on its own.
+      const retry =
         triedProviders.size > 0
-          ? `Every available provider failed or is out of quota. Tried: ${[...triedProviders].join(', ')}.`
-          : `No provider can run this task. ${decision.rejected[0]?.excluded ?? 'None are connected.'}`;
+          ? routeTask({
+              projectId: run.projectId,
+              task,
+              contextTokens: pack.totalTokens,
+              mode: run.plan.mode,
+            })
+          : undefined;
+
+      if (retry?.chosen) {
+        worklog(
+          task,
+          'orchestrator',
+          `No untried provider is available, so this retries on ${retry.chosen.providerName} with the feedback from the last attempt.`,
+          'warn',
+        );
+        triedProviders.clear();
+        decision = retry;
+      } else {
+        task.status = 'failed';
+        task.error =
+          triedProviders.size > 0
+            ? `Every available provider failed or is out of quota. Tried: ${[...triedProviders].join(', ')}.`
+            : `No provider can run this task. ${decision.rejected[0]?.excluded ?? 'None are connected.'}`;
+        worklog(task, 'orchestrator', task.error, 'error');
+        return;
+      }
+    }
+
+    // Narrowed by hand: `decision` may have been reassigned by the fallback
+    // above, so TypeScript cannot carry the earlier `chosen` check through.
+    const candidate = decision.chosen;
+    if (!candidate) {
+      task.status = 'failed';
+      task.error = 'No provider could be selected for this task.';
       worklog(task, 'orchestrator', task.error, 'error');
       return;
     }
 
-    const candidate = decision.chosen;
     const adapter = getProvider(candidate.providerId);
     if (!adapter) {
       triedProviders.add(candidate.providerId);
@@ -619,15 +655,14 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
       recordOutcome(run.projectId, candidate.providerId, task.capability, false);
       repairBrief = outcome.feedback;
 
-      // One repair on the same provider — it has the context and produced the
-      // near-miss. A second failure means a different model, not a third try.
-      const repairsSoFar = task.verification?.repairs ?? 0;
-      if (repairsSoFar >= 1) {
+      // One repair on the same provider, then a different model. See
+      // `hasHadItsRepairAttempt` for why this is counted from the attempt log.
+      if (hasHadItsRepairAttempt(task, candidate.providerId)) {
         triedProviders.add(candidate.providerId);
         worklog(
           task,
           'orchestrator',
-          'Two verification failures here; routing the repair to a different model.',
+          `Two attempts on ${candidate.providerName} failed verification; routing the repair to a different model.`,
           'warn',
         );
       } else {
@@ -649,6 +684,22 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
   task.status = 'failed';
   task.error = `Gave up after ${task.attempts.length} attempts across ${triedProviders.size || 1} provider(s).`;
   worklog(task, 'orchestrator', task.error, 'error');
+}
+
+/**
+ * Has this provider had its one repair attempt on this task?
+ *
+ * The rule: a provider gets two goes — the original and one repair, because it
+ * has the context and produced the near-miss. A second failure means a
+ * different model rather than a third try at the same one.
+ *
+ * Counted from the task's own attempt history, deliberately. The obvious
+ * source, `verification.repairs`, is incremented by the verification step
+ * *before* this is read, so using it retired the provider on its first failure
+ * and the repair attempt never happened at all.
+ */
+export function hasHadItsRepairAttempt(task: Task, providerId: string): boolean {
+  return task.attempts.filter((a) => a.providerId === providerId).length >= 2;
 }
 
 type AttemptOutcome =

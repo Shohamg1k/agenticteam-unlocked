@@ -103,11 +103,12 @@ ledger.
 
 ### Q3 — Should agents run with permission prompts skipped?
 
-**Assumption:** yes, by default, _because the run is contained_: it happens in a
-throwaway git worktree, the command sandbox has an allow-list, and every file
-lands in review before it touches your tree. `manual` is one switch away and is
-honestly labelled — a CLI that blocks on a prompt in a non-interactive run will
-hang until the adapter's timeout, and the UI says so rather than hiding it.
+**Assumption:** yes, by default, _because the run is genuinely contained_. A CLI
+agent's working directory is a throwaway git worktree ([ADR 0007](adr/0007-cli-agents-run-in-a-worktree.md)),
+the command sandbox has an allow-list, and every file it writes lands in review
+before it reaches your tree. `manual` is one switch away and is honestly
+labelled — a CLI that blocks on a prompt in a non-interactive run will hang
+until the adapter's timeout, and the UI says so rather than hiding it.
 
 **Cost to change:** trivial — it is a setting today.
 
@@ -144,16 +145,25 @@ not edit your config**; the app offers a one-click patch you can review.
 
 ### Q6 — Git strategy for parallel workers
 
-**Assumption:** each task runs in its own **git worktree** off a scratch branch,
-and accepted output is applied to the real working tree as a patch. Worktrees
-are used rather than an in-memory patch queue because tier-2 checks need a real
-directory to run `npm test` in.
+**Decided, and it turned out to be load-bearing.** Two things use a throwaway
+worktree:
 
-**The open part:** whether accepted work should also produce a **commit per
-task** on a feature branch (currently: no — a checkpoint ref per acceptance,
-with commits left to you, because most people want to shape their own history).
+- **Tier-2 verification**, because running `npm test` needs a real directory.
+- **CLI agents**, because they edit files directly and would otherwise write
+  into your project before you had seen anything. This was the difference
+  between the central promise being true and being selectively true — see
+  [ADR 0007](adr/0007-cli-agents-run-in-a-worktree.md).
 
-**Cost to change:** small — `server/src/git.ts`.
+HTTP adapters need neither: they return text and never touch the filesystem.
+
+**Known limitation:** a worktree is created from HEAD, so an agent does not see
+changes you made but did not commit _after_ the plan started. The plan-start
+checkpoint commits the working tree first, so the common case is covered, but a
+file edited by hand mid-run is invisible to a task that starts afterwards.
+
+**Still open:** whether accepted work should also produce a **commit per task**
+on a feature branch. Currently no — a checkpoint ref per acceptance, with
+commits left to you, because most people want to shape their own history.
 
 ### Q7 — Budget defaults
 
