@@ -154,16 +154,27 @@ All eight phases of the build plan are implemented and the app is runnable.
 | 7 · Skills, agents, plugins, MCP connectors | Done |
 | 8 · Onboarding, cost dashboard, policy editor, packaging | Done |
 
-**Verified by running it**, not only by tests: a real prompt against a real
+**Verified by running it**, not only by tests. A real prompt against a real
 project planned into a two-task DAG, routed to Claude Code, passed the syntax
 gate and the project's own `npm install` / typecheck / tests in an isolated
 worktree, landed in review with the working tree untouched, and applied on
-acceptance — with the agent-written tests passing. Professional mode plans a
-ten-task SDLC across five phases and holds every downstream task behind its
-phase gate.
+acceptance — with the agent-written tests passing.
 
-204 unit tests and 7 Playwright smoke tests; typecheck, lint and format clean
-across every workspace.
+Professional mode plans a ten-task SDLC across five phases, holds every
+downstream task behind its phase gate, produces a review card listing the
+phase's deliverables, and opens the next phase on approval. The bounded repair
+loop was observed working: a task failed verification at 141s, was handed the
+real errors, and its second attempt passed at 107s.
+
+Running it is also how four real bugs were found that no test would have caught
+— CLI agents writing into the working tree, the self-repair attempt never
+firing, a raw stack trace instead of a port-in-use message, and files inside a
+newly created folder being silently dropped. Each is now fixed and pinned by a
+test.
+
+246 unit tests and 7 Playwright smoke tests. CI is green across Linux, macOS and
+Windows: typecheck, lint, format, unit tests, the full build, the Electron
+bundle, and the end-to-end suite.
 
 ## Development
 
