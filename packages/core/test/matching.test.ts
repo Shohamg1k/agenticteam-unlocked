@@ -181,3 +181,37 @@ describe('selectAgent', () => {
     expect(selectAgent(off, task('Add an index to the orders table in Postgres'))).toBeUndefined();
   });
 });
+
+describe('selectAgent with an assigned role', () => {
+  /**
+   * The collision that motivated scoping by role: "screen" the noun, as in a UI
+   * screen, and "screen reader". A frontend task went to the accessibility
+   * specialist on it, and no amount of scoring tuning fixes that class.
+   */
+  const roster = [
+    agent({
+      name: 'ui-engineer',
+      description: 'Builds interfaces that look and feel designed',
+      whenToUse: 'Screens, pages, components, layouts, styling, CSS',
+      capability: 'frontend',
+      role: 'frontend-engineer',
+    }),
+    agent({
+      name: 'accessibility-engineer',
+      description: 'Interfaces that work by keyboard and screen reader',
+      whenToUse: 'Accessibility, a11y, WCAG, screen reader, ARIA',
+      capability: 'frontend',
+      role: 'qa-engineer',
+    }),
+  ];
+
+  it('chooses among the profiles that do the assigned job', () => {
+    const chosen = selectAgent(roster, task('Build the settings screen', { capability: 'frontend', role: 'frontend-engineer' }));
+    expect(chosen?.agent.name).toBe('ui-engineer');
+  });
+
+  it('still considers everyone when no profile holds that role', () => {
+    const chosen = selectAgent(roster, task('Fix the screen reader labels on the dashboard', { capability: 'frontend', role: 'tech-writer' }));
+    expect(chosen?.agent.name).toBe('accessibility-engineer');
+  });
+});

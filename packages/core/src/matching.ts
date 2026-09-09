@@ -228,8 +228,22 @@ export function selectAgent(
   const titleTerms = terms(task.title);
   const bodyTerms = terms(task.description);
 
-  const ranked = agents
-    .filter((agent) => agent.enabled)
+  const enabled = agents.filter((agent) => agent.enabled);
+
+  /**
+   * When the planner named a role, choose among the people who do that job.
+   *
+   * The planner's assignment is a decision; keyword overlap is a heuristic, and
+   * letting the heuristic outvote the decision produces exactly the confusion
+   * it did: a "Build the settings screen" task assigned to the frontend
+   * engineer went to the accessibility specialist, because "screen" the noun
+   * collides with "screen reader". No amount of tuning fixes that class of
+   * collision; scoping the candidates does.
+   */
+  const sameRole = task.role ? enabled.filter((a) => a.role === task.role) : [];
+  const candidates = sameRole.length ? sameRole : enabled;
+
+  const ranked = candidates
     .map((agent): AgentMatch => {
       const about = `${agent.name} ${agent.whenToUse}`;
       const relevance =
