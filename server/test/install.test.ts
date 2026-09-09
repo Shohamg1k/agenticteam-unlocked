@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { needsInstall, packageManagerFor } from '../src/install.js';
+import { needsInstall, packageManagerFor, packagesIn } from '../src/install.js';
 
 /**
  * Whether a generated project needs installing before it can run.
@@ -80,6 +80,50 @@ describe('needsInstall', () => {
     withProject({ 'package.json': '{ oops' }, (root) => {
       expect(() => needsInstall(root)).not.toThrow();
       expect(needsInstall(root).needed).toBe(false);
+    });
+  });
+});
+
+describe('packagesIn', () => {
+  it('finds both halves of a MERN app', () => {
+    // Installing only the root leaves the client and the server without their
+    // dependencies, which fails exactly like not installing at all while
+    // looking like it worked.
+    withProject(
+      {
+        'package.json': pkg({ concurrently: '^8.0.0' }),
+        'client/package.json': pkg({ react: '^18.0.0' }),
+        'server/package.json': pkg({ express: '^4.19.2' }),
+      },
+      (root) => {
+        const found = packagesIn(root).map((d) => path.relative(root, d) || '.');
+        expect(found).toEqual(['.', 'client', 'server']);
+      },
+    );
+  });
+
+  it('treats a workspace root as the only install', () => {
+    // One `npm install` at a workspace root covers every member; looking for
+    // sub-packages would run the same install several times over.
+    withProject(
+      {
+        'package.json': JSON.stringify({ name: 'w', workspaces: ['client', 'server'], dependencies: {} }),
+        'client/package.json': pkg({ react: '^18.0.0' }),
+        'server/package.json': pkg({ express: '^4.19.2' }),
+      },
+      (root) => expect(packagesIn(root)).toEqual([root]),
+    );
+  });
+
+  it('handles a project that is only a server folder', () => {
+    withProject({ 'server/package.json': pkg({ express: '^4.19.2' }) }, (root) => {
+      expect(packagesIn(root).map((d) => path.relative(root, d))).toEqual(['server']);
+    });
+  });
+
+  it('is just the root for an ordinary single-package project', () => {
+    withProject({ 'package.json': pkg({ express: '^4.19.2' }) }, (root) => {
+      expect(packagesIn(root)).toEqual([root]);
     });
   });
 });

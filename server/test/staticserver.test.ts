@@ -102,6 +102,35 @@ describe('parseDevServerUrl, when the server announces a port rather than a URL'
   });
 });
 
+describe('parseDevServerUrl, on a MERN app that runs two servers', () => {
+  it('opens the frontend, not the API', () => {
+    // A MERN dev script runs both halves under `concurrently`. The one worth
+    // showing is the client; landing on the API would show a JSON endpoint and
+    // read as "the preview is broken".
+    //
+    // It works out because of what each half prints: a user-facing dev server
+    // announces a full URL because a human is meant to click it, while an API
+    // says "listening on port 5000". A real URL beats a port in prose.
+    const output = [
+      '[server] Server listening on port 5000',
+      '[server] MongoDB connection error: connect ECONNREFUSED 127.0.0.1:27017',
+      '[client]   VITE v5.2.0  ready in 512 ms',
+      '[client]   ➜  Local:   http://localhost:5173/',
+    ].join('\n');
+
+    expect(portOf(parseDevServerUrl(output)!)).toBe(5173);
+  });
+
+  it('still opens the frontend when it announced itself first', () => {
+    const output = [
+      '[client]   ➜  Local:   http://localhost:5173/',
+      '[server] Server listening on port 5000',
+    ].join('\n');
+
+    expect(portOf(parseDevServerUrl(output)!)).toBe(5173);
+  });
+});
+
 describe('findHtmlFiles', () => {
   const withTree = <T>(tree: Record<string, string>, fn: (root: string) => T): T => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'agentic-html-'));

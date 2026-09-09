@@ -86,6 +86,44 @@ export function needsInstall(root: string): { needed: boolean; reason: string } 
   return { needed: false, reason: 'dependencies are already installed' };
 }
 
+/**
+ * Every package in this project that has to be installed separately.
+ *
+ * A MERN app is almost never one package. It is a `client/` and a `server/`,
+ * each with its own package.json, and installing only the root leaves both
+ * halves of the application without their dependencies — which fails exactly
+ * like not installing at all, while looking like it worked.
+ *
+ * npm workspaces are the exception, handled by not being one: a root
+ * `workspaces` field means a single root install covers every member, so
+ * looking for sub-packages would run the same install several times over.
+ */
+export function packagesIn(root: string): string[] {
+  const rootManifest = path.join(root, 'package.json');
+  if (!fs.existsSync(rootManifest)) return findSubPackages(root);
+
+  try {
+    const pkg = JSON.parse(fs.readFileSync(rootManifest, 'utf8')) as { workspaces?: unknown };
+    if (pkg.workspaces) return [root];
+  } catch {
+    // A manifest we cannot read is one we cannot trust to be a workspace root.
+  }
+
+  return [root, ...findSubPackages(root)];
+}
+
+/** Conventional sub-project folders, one level down. Not a recursive walk. */
+const SUBPROJECT_DIRS = ['client', 'server', 'api', 'frontend', 'backend', 'web', 'app', 'ui'];
+
+function findSubPackages(root: string): string[] {
+  const found: string[] = [];
+  for (const name of SUBPROJECT_DIRS) {
+    const dir = path.join(root, name);
+    if (fs.existsSync(path.join(dir, 'package.json'))) found.push(dir);
+  }
+  return found;
+}
+
 export interface InstallOptions {
   root: string;
   /** Called with each chunk of output, for the UI. */
@@ -94,13 +132,43 @@ export interface InstallOptions {
 }
 
 /**
- * Run the install.
+ * Install every package in the project that needs it.
+ *
+ * One failure fails the whole start, because half an installed MERN app is not
+ * a runnable one.
+ */
+export async function installDependencies(opts: InstallOptions): Promise<InstallResult> {
+  const started = Date.now();
+  const packages = packagesIn(opts.root).filter((dir) => needsInstall(dir).needed);
+
+  if (!packages.length) {
+    return {
+      ok: true,
+      skipped: needsInstall(opts.root).reason,
+      output: '',
+      durationMs: Date.now() - started,
+    };
+  }
+
+  let output = '';
+  for (const dir of packages) {
+    const label = dir === opts.root ? '' : `${path.relative(opts.root, dir)}: `;
+    const result = await installOne({ ...opts, root: dir, label });
+    output += result.output;
+    if (!result.ok) return { ok: false, output, durationMs: Date.now() - started };
+  }
+
+  return { ok: true, output, durationMs: Date.now() - started };
+}
+
+/**
+ * Run one install.
  *
  * `--no-audit --no-fund` on npm because both write paragraphs to stdout that
  * have nothing to do with whether the install worked, and this output is shown
  * to a person waiting for their app to start.
  */
-export async function installDependencies(opts: InstallOptions): Promise<InstallResult> {
+async function installOne(opts: InstallOptions & { label: string }): Promise<InstallResult> {
   const started = Date.now();
   const check = needsInstall(opts.root);
   if (!check.needed) {
@@ -115,8 +183,8 @@ export async function installDependencies(opts: InstallOptions): Promise<Install
         ? ['install']
         : ['install'];
 
-  log(`Installing dependencies with ${manager} — ${check.reason}`, 'info');
-  opts.onOutput?.(`Installing dependencies with ${manager}…\n`);
+  log(`Installing dependencies in ${opts.root} with ${manager} — ${check.reason}`, 'info');
+  opts.onOutput?.(`${opts.label}installing with ${manager}…\n`);
 
   return new Promise<InstallResult>((resolve) => {
     let output = '';
