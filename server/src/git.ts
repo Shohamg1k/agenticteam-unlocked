@@ -183,8 +183,21 @@ export interface StatusEntry {
   untracked: boolean;
 }
 
-export async function status(root: string): Promise<StatusEntry[]> {
-  const r = await git(['status', '--porcelain=v1', '-z'], root);
+/**
+ * `expandUntracked` matters more than it looks: by default git collapses a new
+ * untracked directory to a single `?? src/` entry rather than listing the files
+ * inside it. Any caller that needs the actual files — collecting an agent's
+ * work, for instance — would silently lose everything in a newly created
+ * folder, which is most of what a build task produces.
+ *
+ * It is not the default because `-uall` in a repo whose .gitignore does not yet
+ * cover `node_modules` would enumerate tens of thousands of paths. Git never
+ * lists ignored files, so it is safe wherever the ignore file is in place.
+ */
+export async function status(root: string, opts: { expandUntracked?: boolean } = {}): Promise<StatusEntry[]> {
+  const args = ['status', '--porcelain=v1', '-z'];
+  if (opts.expandUntracked) args.push('--untracked-files=all');
+  const r = await git(args, root);
   if (r.exitCode !== 0) return [];
   // -z is NUL-separated, which is the only way to survive filenames with
   // spaces, quotes or newlines in them.
@@ -287,6 +300,65 @@ export async function createWorktree(root: string, label: string): Promise<Workt
       await git(['worktree', 'prune'], root).catch(() => undefined);
     },
   };
+}
+
+export interface WorktreeChange {
+  path: string;
+  content: string;
+}
+
+/**
+ * Everything a CLI agent created or changed inside its worktree.
+ *
+ * CLI coding agents edit files directly — that is what they are. Running them
+ * in a worktree is what keeps "nothing touches your working tree until you
+ * accept it" true for them as well as for HTTP adapters, and this is how their
+ * work is collected back out for review.
+ *
+ * Deletions are not returned: an agent removing a file it did not create is
+ * almost always a mistake, and there is no way for the reviewer to see the
+ * difference between "deliberately deleted" and "lost". They are reported
+ * separately so the orchestrator can note them in the worklog.
+ */
+export async function collectWorktreeChanges(
+  worktreeDir: string,
+  opts: { maxFiles?: number; maxBytes?: number } = {},
+): Promise<{ files: WorktreeChange[]; deleted: string[]; truncated: boolean }> {
+  const maxFiles = opts.maxFiles ?? 60;
+  const maxBytes = opts.maxBytes ?? 1_000_000;
+
+  const files: WorktreeChange[] = [];
+  const deleted: string[] = [];
+  let truncated = false;
+
+  for (const entry of await status(worktreeDir, { expandUntracked: true })) {
+    // The app's own state directory is not the agent's work.
+    if (entry.path.startsWith('.agentic-team/')) continue;
+
+    if (entry.code === ' D' || entry.code === 'D ') {
+      deleted.push(entry.path);
+      continue;
+    }
+    if (files.length >= maxFiles) {
+      truncated = true;
+      break;
+    }
+
+    const abs = path.join(worktreeDir, entry.path);
+    try {
+      const stat = fs.statSync(abs);
+      if (!stat.isFile() || stat.size > maxBytes) continue;
+      const buffer = fs.readFileSync(abs);
+      // Binary output cannot be reviewed as a diff and is almost never what a
+      // coding task should be producing.
+      if (buffer.includes(0)) continue;
+      files.push({ path: entry.path, content: buffer.toString('utf8') });
+    } catch {
+      // A file that vanished between status and read is not worth failing over.
+    }
+  }
+
+  return { files, deleted, truncated };
 }
 
 /** Delete worktree directories left behind by a crash. Run at startup. */

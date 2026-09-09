@@ -34,6 +34,8 @@ import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
 import { repairFeedback, scanForSecrets, verifyArtifacts } from './verify.js';
 import { auditAutoAccept, checkGate, enqueueReview } from './review.js';
 import { takeCheckpoint } from './checkpoints.js';
+import { collectWorktreeChanges, createWorktree } from './git.js';
+import type { Worktree } from './git.js';
 import { startCooldown } from './quota.js';
 import { addMemory } from './memory.js';
 import { activeSkillsFor } from './skills.js';
@@ -682,39 +684,102 @@ async function runAttempt(args: {
   let text = '';
   let usage: TokenUsage | undefined;
   let failure: AttemptOutcome | undefined;
+  /** Files a CLI agent wrote into its worktree, collected before disposal. */
+  let worktreeFiles: FileArtifact[] = [];
+
+  /**
+   * CLI agents edit files directly — that is what they are, and it is why they
+   * are worth having. So they get a throwaway worktree as their working
+   * directory rather than the user's real folder.
+   *
+   * Without this, "nothing touches your working tree until you accept it" is
+   * true for HTTP adapters and quietly false for CLI ones, which is worse than
+   * not promising it at all. HTTP adapters never write files themselves, so
+   * they run against the real root and read from it directly.
+   */
+  let worktree: Worktree | undefined;
+  let cwd = ps.root;
+  if (adapter.transport === 'cli') {
+    try {
+      worktree = await createWorktree(ps.root, `agent-${task.id}`);
+      cwd = worktree.dir;
+    } catch (err) {
+      // Without isolation we will not run a file-editing agent against the
+      // user's tree. Failing the attempt is the safe outcome, and the ladder
+      // moves the task to a provider that does not need one.
+      attempt.outcome = 'error';
+      attempt.endedAt = Date.now();
+      return {
+        kind: 'provider-error',
+        error: {
+          kind: 'unavailable',
+          message:
+            `${adapter.name} edits files directly and needs an isolated git worktree, which could not be ` +
+            `created (${describeError(err)}). Refusing to run it against your working tree.`,
+        },
+      };
+    }
+  }
 
   const request = {
     runId,
     model: candidate.model.id,
     system: pack.stable,
     messages: [{ role: 'user' as const, content: pack.volatile }],
-    cwd: ps.root,
+    cwd,
     cachePrefix: true,
     maxOutputTokens: Math.min(32_000, candidate.model.maxOutputTokens),
   };
 
-  const iterator = adapter.execute
-    ? adapter.execute(
-        { runId, model: candidate.model.id, task, context: pack.volatile, system: pack.stable, cwd: ps.root },
-        signal,
-      )
-    : adapter.stream(request, signal);
+  try {
+    const iterator = adapter.execute
+      ? adapter.execute(
+          { runId, model: candidate.model.id, task, context: pack.volatile, system: pack.stable, cwd },
+          signal,
+        )
+      : adapter.stream(request, signal);
 
-  for await (const event of iterator) {
-    emit(task.id, event);
-    if (event.type === 'delta') text += event.text;
-    else if (event.type === 'usage') usage = event.usage;
-    else if (event.type === 'done') {
-      text = event.text || text;
-      usage = event.usage;
-    } else if (event.type === 'error') {
-      failure =
-        event.error.kind === 'cancelled'
-          ? { kind: 'cancelled' }
-          : { kind: 'provider-error', error: event.error };
-    } else if (event.type === 'log' && event.level !== 'info') {
-      worklog(task, adapter.id, event.text.slice(0, 500), event.level);
+    for await (const event of iterator) {
+      emit(task.id, event);
+      if (event.type === 'delta') text += event.text;
+      else if (event.type === 'usage') usage = event.usage;
+      else if (event.type === 'done') {
+        text = event.text || text;
+        usage = event.usage;
+      } else if (event.type === 'error') {
+        failure =
+          event.error.kind === 'cancelled'
+            ? { kind: 'cancelled' }
+            : { kind: 'provider-error', error: event.error };
+      } else if (event.type === 'log' && event.level !== 'info') {
+        worklog(task, adapter.id, event.text.slice(0, 500), event.level);
+      }
     }
+
+    // Collect what the agent actually wrote, before the worktree is destroyed.
+    if (worktree) {
+      const changes = await collectWorktreeChanges(worktree.dir);
+      worktreeFiles = changes.files;
+      if (changes.deleted.length) {
+        worklog(
+          task,
+          adapter.id,
+          `It deleted ${changes.deleted.length} file(s) (${changes.deleted.slice(0, 5).join(', ')}). ` +
+            'Deletions are not applied automatically — remove them yourself if that was intended.',
+          'warn',
+        );
+      }
+      if (changes.truncated) {
+        worklog(
+          task,
+          adapter.id,
+          'It changed more files than one task should; only the first 60 are reviewable.',
+          'warn',
+        );
+      }
+    }
+  } finally {
+    await worktree?.dispose();
   }
 
   // Account for the call whether it succeeded or not — a failed call still
@@ -740,7 +805,15 @@ async function runAttempt(args: {
   task.output = text;
 
   // ---- Parse ----------------------------------------------------------
-  const files = extractFiles(text);
+  // A CLI agent's real output is the files it wrote, not its prose. FILE:
+  // blocks are merged in for anything it described but did not write, with the
+  // written version winning a conflict — that is the one its own tools saw.
+  const described = extractFiles(text);
+  const byPath = new Map<string, FileArtifact>();
+  for (const file of described) byPath.set(file.path, file);
+  for (const file of worktreeFiles) byPath.set(file.path, file);
+  const files = [...byPath.values()];
+
   if (!files.length) {
     attempt.outcome = 'verification-failed';
     return {
