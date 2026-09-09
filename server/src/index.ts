@@ -83,6 +83,16 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
   const server = http.createServer(app);
   const wss = new WebSocketServer({ server, path: '/ws' });
 
+  // `ws` re-emits the http server's errors on itself. Without a handler here,
+  // a failed listen (a second copy of the app, most commonly) becomes an
+  // unhandled 'error' event and Node exits with a raw stack trace — throwing
+  // away the actionable message the listen path below is written to produce.
+  wss.on('error', (err) => {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EADDRINUSE') return; // The listen handler reports this one.
+    log(`WebSocket server error: ${describeError(err)}`, 'error');
+  });
+
   // -------------------------------------------------------------------------
   // WebSocket: one snapshot channel plus high-frequency run and terminal data
   // -------------------------------------------------------------------------
@@ -229,7 +239,8 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
   const stopQuotaAutosave = startQuotaAutosave();
 
   await new Promise<void>((resolve, reject) => {
-    server.once('error', (err: NodeJS.ErrnoException) => {
+    const onError = (err: NodeJS.ErrnoException) => {
+      server.removeListener('listening', onListening);
       if (err.code === 'EADDRINUSE') {
         reject(
           new Error(
@@ -240,8 +251,14 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
       } else {
         reject(err);
       }
-    });
-    server.listen(PORT, HOST, resolve);
+    };
+    const onListening = () => {
+      server.removeListener('error', onError);
+      resolve();
+    };
+    server.once('error', onError);
+    server.once('listening', onListening);
+    server.listen(PORT, HOST);
   });
 
   const ready = [
