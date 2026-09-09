@@ -1,4 +1,4 @@
-import { afterAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -26,6 +26,12 @@ const {
   startCooldown,
   usageRollup,
 } = await import('../src/quota.js');
+
+afterEach(() => {
+  // Any test that moved the clock must put it back, or every later test sees
+  // the wrong time.
+  vi.useRealTimers();
+});
 
 afterAll(() => {
   fs.rmSync(dataDir, { recursive: true, force: true });
@@ -113,7 +119,16 @@ describe('cooldowns', () => {
 
   it('reports as absent once it has passed', () => {
     // A cooldown is never permanent — free tiers come back.
-    startCooldown('groq', 60_000, 1);
+    //
+    // The clock is moved rather than slept past: a 1ms cooldown read in the
+    // same millisecond it was set is still in the future, so the obvious
+    // version of this test passes locally and fails roughly one run in five
+    // on a fast CI machine. It did exactly that.
+    const until = startCooldown('groq', 60_000, 1_000);
+    expect(quotaState('groq').cooldownUntil).toBe(until);
+
+    vi.useFakeTimers();
+    vi.setSystemTime(until + 1);
     expect(quotaState('groq').cooldownUntil).toBeUndefined();
   });
 });
