@@ -278,7 +278,367 @@
     var data = event.data;
     if (!data || data.source !== 'agentic-app') return;
     if (data.type === 'set-picking') setPicking(data.picking);
+    if (data.type === 'set-annotating') setAnnotating(data.annotating, data.kind);
+    if (data.type === 'set-annotations') {
+      annotations = Array.isArray(data.annotations) ? data.annotations : [];
+      repaintAnnotations();
+    }
     if (data.type === 'ping') send('pong', {});
+  });
+
+  // -------------------------------------------------------------------------
+  // Annotations
+  // -------------------------------------------------------------------------
+
+  /**
+   * Drawing on the running page.
+   *
+   * The element picker answers "which element", and that is often not the
+   * question. "This heading is too big", "these three cards should be a row",
+   * "there is too much space here" are all about a REGION, and about several
+   * of them at once. So: drag a box, type a note, repeat, then send the round.
+   *
+   * Every annotation still resolves the element under its centre, because a
+   * selector is what lets the agent find the thing in source. The box is how
+   * the user says it; the selector is how the agent finds it.
+   *
+   * Coordinates are stored in PAGE space, not viewport space, so a note stays
+   * on the thing it was drawn on when the page is scrolled.
+   */
+
+  var annotating = false;
+  var annotations = [];
+  var layer = null;
+  var draft = null;
+  var dragFrom = null;
+
+  var COLOURS = { box: '#f97316', note: '#6366f1', arrow: '#10b981' };
+  var annotationKind = 'box';
+
+  function ensureLayer() {
+    if (layer) return layer;
+    layer = document.createElement('div');
+    layer.setAttribute('data-agentic-ui', '');
+    layer.style.cssText = [
+      'position:absolute',
+      'left:0',
+      'top:0',
+      'width:0',
+      'height:0',
+      'z-index:2147483645',
+      'pointer-events:none',
+    ].join(';');
+    (document.body || document.documentElement).appendChild(layer);
+    return layer;
+  }
+
+  function pageRectFrom(a, b) {
+    var left = Math.min(a.x, b.x);
+    var top = Math.min(a.y, b.y);
+    return {
+      x: left,
+      y: top,
+      width: Math.abs(a.x - b.x),
+      height: Math.abs(a.y - b.y),
+    };
+  }
+
+  function pointOf(event) {
+    return {
+      x: event.clientX + (window.scrollX || window.pageXOffset || 0),
+      y: event.clientY + (window.scrollY || window.pageYOffset || 0),
+    };
+  }
+
+  /** The element a note is about: whatever is under the middle of its box. */
+  function targetUnder(rect) {
+    var cx = rect.x + rect.width / 2 - (window.scrollX || window.pageXOffset || 0);
+    var cy = rect.y + rect.height / 2 - (window.scrollY || window.pageYOffset || 0);
+    var el = null;
+    try {
+      // Hide our own layer first, or every annotation resolves to itself.
+      var previous = layer ? layer.style.display : null;
+      if (layer) layer.style.display = 'none';
+      el = document.elementFromPoint(cx, cy);
+      if (layer) layer.style.display = previous;
+    } catch (err) {
+      return undefined;
+    }
+    if (!el || isOurs(el)) return undefined;
+    return resolveSource(el);
+  }
+
+  function drawBox(annotation, index) {
+    var box = document.createElement('div');
+    box.setAttribute('data-agentic-ui', '');
+    box.setAttribute('data-agentic-annotation', annotation.id);
+    var colour = COLOURS[annotation.kind] || COLOURS.box;
+    box.style.cssText = [
+      'position:absolute',
+      'left:' + annotation.rect.x + 'px',
+      'top:' + annotation.rect.y + 'px',
+      'width:' + annotation.rect.width + 'px',
+      'height:' + annotation.rect.height + 'px',
+      'border:2px solid ' + colour,
+      'background:' + colour + '1f',
+      'border-radius:4px',
+      'pointer-events:none',
+      'box-sizing:border-box',
+    ].join(';');
+
+    var badge = document.createElement('div');
+    badge.setAttribute('data-agentic-ui', '');
+    badge.textContent = String(index + 1);
+    badge.title = annotation.text || 'Click to remove this note';
+    badge.style.cssText = [
+      'position:absolute',
+      'left:' + annotation.rect.x + 'px',
+      'top:' + Math.max(0, annotation.rect.y - 22) + 'px',
+      'min-width:20px',
+      'height:20px',
+      'padding:0 6px',
+      'border-radius:10px',
+      'background:' + colour,
+      'color:#fff',
+      'font:600 12px/20px ui-sans-serif,system-ui,sans-serif',
+      'text-align:center',
+      'cursor:pointer',
+      'pointer-events:auto',
+      'box-shadow:0 1px 4px rgba(0,0,0,0.35)',
+    ].join(';');
+    badge.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      removeAnnotation(annotation.id);
+    });
+
+    var caption = null;
+    if (annotation.text) {
+      caption = document.createElement('div');
+      caption.setAttribute('data-agentic-ui', '');
+      caption.textContent = annotation.text;
+      caption.style.cssText = [
+        'position:absolute',
+        'left:' + annotation.rect.x + 'px',
+        'top:' + (annotation.rect.y + annotation.rect.height + 4) + 'px',
+        'max-width:' + Math.max(180, annotation.rect.width) + 'px',
+        'padding:4px 8px',
+        'border-radius:5px',
+        'background:#111827',
+        'color:#f9fafb',
+        'font:13px/1.45 ui-sans-serif,system-ui,sans-serif',
+        'pointer-events:none',
+        'box-shadow:0 2px 8px rgba(0,0,0,0.35)',
+      ].join(';');
+    }
+
+    ensureLayer().appendChild(box);
+    ensureLayer().appendChild(badge);
+    if (caption) ensureLayer().appendChild(caption);
+  }
+
+  function repaintAnnotations() {
+    if (!layer) {
+      if (!annotations.length) return;
+      ensureLayer();
+    }
+    while (layer.firstChild) layer.removeChild(layer.firstChild);
+    for (var i = 0; i < annotations.length; i++) drawBox(annotations[i], i);
+    if (draft) drawBox(draft, annotations.length);
+  }
+
+  function removeAnnotation(id) {
+    annotations = annotations.filter(function (a) {
+      return a.id !== id;
+    });
+    repaintAnnotations();
+    send('annotation-removed', { id: id });
+  }
+
+  /**
+   * Ask for the note text.
+   *
+   * A DOM input rather than `window.prompt`, for two reasons that both matter:
+   * `prompt` is blocked in cross-origin iframes and in some Electron
+   * configurations, and it steals focus from the page in a way that changes
+   * what is being annotated (a focus ring appears, a dropdown closes).
+   */
+  function askForNote(rect, onDone) {
+    var wrap = document.createElement('div');
+    wrap.setAttribute('data-agentic-ui', '');
+    wrap.style.cssText = [
+      'position:absolute',
+      'left:' + rect.x + 'px',
+      'top:' + (rect.y + rect.height + 6) + 'px',
+      'z-index:2147483647',
+      'display:flex',
+      'gap:6px',
+      'align-items:center',
+      'padding:6px',
+      'border-radius:8px',
+      'background:#111827',
+      'box-shadow:0 4px 16px rgba(0,0,0,0.45)',
+      'pointer-events:auto',
+    ].join(';');
+
+    var input = document.createElement('input');
+    input.setAttribute('data-agentic-ui', '');
+    input.type = 'text';
+    input.placeholder = 'What should change here?';
+    input.style.cssText = [
+      'width:280px',
+      'padding:6px 8px',
+      'border:1px solid #374151',
+      'border-radius:5px',
+      'background:#1f2937',
+      'color:#f9fafb',
+      'font:13px/1.4 ui-sans-serif,system-ui,sans-serif',
+      'outline:none',
+    ].join(';');
+
+    var save = document.createElement('button');
+    save.setAttribute('data-agentic-ui', '');
+    save.type = 'button';
+    save.textContent = 'Add';
+    save.style.cssText = [
+      'padding:6px 12px',
+      'border:0',
+      'border-radius:5px',
+      'background:#6366f1',
+      'color:#fff',
+      'font:600 13px/1.4 ui-sans-serif,system-ui,sans-serif',
+      'cursor:pointer',
+    ].join(';');
+
+    function finish(text) {
+      if (wrap.parentNode) wrap.parentNode.removeChild(wrap);
+      onDone(text);
+    }
+
+    save.addEventListener('click', function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      finish(input.value);
+    });
+    input.addEventListener('keydown', function (event) {
+      event.stopPropagation();
+      if (event.key === 'Enter') {
+        event.preventDefault();
+        finish(input.value);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        finish(null);
+      }
+    });
+
+    wrap.appendChild(input);
+    wrap.appendChild(save);
+    ensureLayer().appendChild(wrap);
+    // The page may steal focus during layout; a frame's delay is enough.
+    setTimeout(function () {
+      try {
+        input.focus();
+      } catch (err) {
+        /* focus is a nicety, not a requirement */
+      }
+    }, 0);
+  }
+
+  function onAnnotateDown(event) {
+    if (!annotating || isOurs(event.target)) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    dragFrom = pointOf(event);
+    draft = { id: 'draft', kind: annotationKind, text: '', rect: pageRectFrom(dragFrom, dragFrom) };
+    repaintAnnotations();
+  }
+
+  function onAnnotateMove(event) {
+    if (!annotating || !dragFrom) return;
+    event.preventDefault();
+    draft.rect = pageRectFrom(dragFrom, pointOf(event));
+    repaintAnnotations();
+  }
+
+  function onAnnotateUp(event) {
+    if (!annotating || !dragFrom) return;
+    event.preventDefault();
+    event.stopPropagation();
+
+    var rect = pageRectFrom(dragFrom, pointOf(event));
+    dragFrom = null;
+
+    // A click rather than a drag: annotate the element that was clicked, at its
+    // own size. Requiring a deliberate drag to leave a note would make the
+    // common case — "this button" — the awkward one.
+    if (rect.width < 8 || rect.height < 8) {
+      var el = document.elementFromPoint(
+        rect.x - (window.scrollX || window.pageXOffset || 0),
+        rect.y - (window.scrollY || window.pageYOffset || 0),
+      );
+      if (el && !isOurs(el)) {
+        var box = el.getBoundingClientRect();
+        rect = {
+          x: box.left + (window.scrollX || window.pageXOffset || 0),
+          y: box.top + (window.scrollY || window.pageYOffset || 0),
+          width: box.width,
+          height: box.height,
+        };
+      }
+    }
+
+    draft = { id: 'draft', kind: annotationKind, text: '', rect: rect };
+    repaintAnnotations();
+
+    askForNote(rect, function (text) {
+      draft = null;
+      if (text === null) {
+        repaintAnnotations();
+        return;
+      }
+      var annotation = {
+        id: 'an_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+        kind: annotationKind,
+        text: text || '',
+        rect: rect,
+        target: targetUnder(rect),
+        pageUrl: location.pathname + location.search,
+        createdAt: Date.now(),
+      };
+      annotations.push(annotation);
+      repaintAnnotations();
+      send('annotation-added', annotation);
+    });
+  }
+
+  function setAnnotating(on, kind) {
+    annotating = !!on;
+    if (kind) annotationKind = kind;
+    dragFrom = null;
+    draft = null;
+    document.documentElement.style.cursor = annotating ? 'crosshair' : '';
+    if (annotating) {
+      // Picking and annotating both own the pointer; one of them has to yield.
+      setPicking(false);
+      // Text selection while dragging a box makes the whole page flash blue.
+      document.documentElement.style.userSelect = 'none';
+    } else {
+      document.documentElement.style.userSelect = '';
+    }
+    repaintAnnotations();
+    send('annotate-state', { annotating: annotating, kind: annotationKind });
+  }
+
+  document.addEventListener('mousedown', onAnnotateDown, true);
+  document.addEventListener('mousemove', onAnnotateMove, true);
+  document.addEventListener('mouseup', onAnnotateUp, true);
+
+  // Annotations are absolutely positioned in page space, so scrolling needs no
+  // repaint — but a resize reflows the page under them, and a stale box then
+  // points at nothing.
+  window.addEventListener('resize', function () {
+    if (annotations.length) repaintAnnotations();
   });
 
   // -------------------------------------------------------------------------

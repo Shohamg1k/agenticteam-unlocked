@@ -5,10 +5,24 @@ import net from 'node:net';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import fs from 'node:fs';
-import type { PreviewConsoleLine, PreviewNetworkError, PreviewState } from '@agentic/core';
+import type {
+  PreviewAnnotation,
+  PreviewConsoleLine,
+  PreviewNetworkError,
+  PreviewState,
+} from '@agentic/core';
 import { profileProject } from './projects.js';
 import { changed, projectState } from './store.js';
 import { describeError, log } from './log.js';
+import { startStaticServer } from './staticserver.js';
+import type { StaticServer } from './staticserver.js';
+import {
+  findHtmlFiles,
+  parseDevServerUrl,
+  pathOf,
+  portOf,
+  shouldServeStatically,
+} from './previewdetect.js';
 
 /**
  * The preview: run the project's dev server and show it inside the app.
@@ -30,6 +44,8 @@ interface PreviewProcess {
   projectId: string;
   child?: ChildProcess;
   proxy?: http.Server;
+  /** Static mode only: the file server standing in for a dev server. */
+  static?: StaticServer;
   state: PreviewState;
   /** Recent output, so a failed start can show why. */
   output: string[];
@@ -39,6 +55,7 @@ const previews = new Map<string, PreviewProcess>();
 
 const MAX_CONSOLE_LINES = 300;
 const MAX_NETWORK_ERRORS = 100;
+const MAX_ANNOTATIONS = 60;
 
 export function previewStates(): PreviewState[] {
   return [...previews.values()].map((p) => p.state);
@@ -52,23 +69,61 @@ export function previewState(projectId: string): PreviewState | undefined {
 // Starting and stopping
 // ---------------------------------------------------------------------------
 
-export async function startPreview(projectId: string): Promise<PreviewState> {
+/**
+ * Start a preview, whichever kind this project needs.
+ *
+ * The two paths differ in everything except what the user sees: a URL in an
+ * iframe with the overlay attached. That symmetry is deliberate — the picker,
+ * the console capture and the annotations all work the same way on a static
+ * page as on a Next.js app, because they are injected the same way.
+ */
+export async function startPreview(
+  projectId: string,
+  opts: { entryFile?: string } = {},
+): Promise<PreviewState> {
   const ps = projectState(projectId);
   if (!ps) throw new Error(`No such project: ${projectId}`);
 
   const existing = previews.get(projectId);
-  if (existing?.state.status === 'running') return existing.state;
+  // Switching page in a static preview restarts it: cheap, and it keeps "which
+  // file am I looking at" in exactly one place.
+  const switchingPage = opts.entryFile !== undefined && existing?.state.entryFile !== opts.entryFile;
+  if (existing?.state.status === 'running' && !switchingPage) return existing.state;
   if (existing) await stopPreview(projectId);
 
   const profile = profileProject(ps.root);
+  const htmlFiles = findHtmlFiles(ps.root);
+
+  if (shouldServeStatically({ hasDevServer: Boolean(profile.devServer), htmlFiles })) {
+    return startStaticPreview(projectId, ps.root, htmlFiles, opts.entryFile);
+  }
+
   if (!profile.devServer) {
     throw new Error(
-      'No dev server command was detected for this project. Set one in Project settings (for example `npm run dev` on port 3000).',
+      'No dev server command was detected, and there is no HTML file to open directly. ' +
+        'Set a dev server in Project settings (for example `npm run dev` on port 3000).',
     );
   }
 
-  const { command, port } = profile.devServer;
-  const proxyPort = await findFreePort(port + 1);
+  return startDevServerPreview(projectId, ps.root, profile.devServer);
+}
+
+/** The Live Server path: serve the folder, open the page, reload on change. */
+async function startStaticPreview(
+  projectId: string,
+  root: string,
+  htmlFiles: string[],
+  requestedEntry?: string,
+): Promise<PreviewState> {
+  // An entry the caller asked for wins, but only if it is one we found. The
+  // value arrives over HTTP, and serving an arbitrary path because it was
+  // asked for is how a preview turns into a file-read primitive.
+  const entryFile =
+    requestedEntry && htmlFiles.includes(requestedEntry)
+      ? requestedEntry
+      : (htmlFiles[0] ?? 'index.html');
+
+  const port = await findFreePort(5500);
 
   const preview: PreviewProcess = {
     projectId,
@@ -76,17 +131,68 @@ export async function startPreview(projectId: string): Promise<PreviewState> {
     state: {
       projectId,
       status: 'starting',
-      command,
-      port: proxyPort,
+      mode: 'static',
+      entryFile,
+      htmlFiles,
+      port,
       consoleLines: [],
       networkErrors: [],
+      annotations: [],
+    },
+  };
+  previews.set(projectId, preview);
+  changed();
+
+  try {
+    preview.static = await startStaticServer({
+      root,
+      port,
+      overlay: loadOverlayScript(),
+      projectId,
+    });
+  } catch (err) {
+    preview.state.status = 'failed';
+    preview.state.error = `Could not start the file server: ${describeError(err)}`;
+    changed();
+    return preview.state;
+  }
+
+  preview.state.status = 'running';
+  preview.state.url = `http://127.0.0.1:${port}/${entryFile}`;
+  preview.state.command = `serving ${entryFile}`;
+  preview.state.error = undefined;
+  changed();
+
+  log(`Preview serving ${entryFile} at ${preview.state.url}`, 'info', { projectId });
+  return preview.state;
+}
+
+/** The dev-server path: run the project's own command, then proxy it. */
+async function startDevServerPreview(
+  projectId: string,
+  root: string,
+  devServer: { command: string; port: number },
+): Promise<PreviewState> {
+  const { command, port: guessedPort } = devServer;
+
+  const preview: PreviewProcess = {
+    projectId,
+    output: [],
+    state: {
+      projectId,
+      status: 'starting',
+      mode: 'dev-server',
+      command,
+      consoleLines: [],
+      networkErrors: [],
+      annotations: [],
     },
   };
   previews.set(projectId, preview);
   changed();
 
   const child = spawn(command, {
-    cwd: ps.root,
+    cwd: root,
     shell: true,
     windowsHide: true,
     env: { ...process.env, FORCE_COLOR: '0', BROWSER: 'none' },
@@ -97,6 +203,11 @@ export async function startPreview(projectId: string): Promise<PreviewState> {
     const text = chunk.toString();
     preview.output.push(text);
     if (preview.output.length > 200) preview.output.splice(0, preview.output.length - 200);
+
+    // Read the dev server's own announcement as it arrives. This is the whole
+    // reason the preview now finds a server that did not land on its usual port.
+    const found = parseDevServerUrl(preview.output.join(''));
+    if (found && found !== preview.state.detectedUrl) preview.state.detectedUrl = found;
   };
   child.stdout?.on('data', capture);
   child.stderr?.on('data', capture);
@@ -117,31 +228,71 @@ export async function startPreview(projectId: string): Promise<PreviewState> {
     }
   });
 
-  // Wait for the real dev server to answer before proxying to it: a proxy that
-  // starts first shows a connection error, which reads as "the app is broken".
-  const ready = await waitForPort(port, 60_000);
-  if (!ready) {
+  // Wait for a server to answer. What we wait FOR changes as we learn: the
+  // moment the dev server prints its URL, that port is the one that matters and
+  // the guess is abandoned.
+  const target = await waitForDevServer(preview, guessedPort, 90_000);
+
+  if (!target) {
     preview.state.status = 'failed';
     preview.state.error = [
-      `The dev server did not start listening on port ${port} within 60 seconds.`,
+      'The dev server did not start listening within 90 seconds.',
+      preview.state.detectedUrl
+        ? `It said it was on ${preview.state.detectedUrl}, but nothing answered there.`
+        : `Nothing in its output looked like a URL, and port ${guessedPort} stayed closed. ` +
+          'Set the right port in Project settings.',
       '',
-      'Check the port in Project settings, or look at the output below:',
       preview.output.join('').slice(-1_500),
     ].join('\n');
     changed();
     return preview.state;
   }
 
-  preview.proxy = createProxy(port, proxyPort, projectId);
+  const proxyPort = await findFreePort(target.port + 1);
+  preview.proxy = createProxy(target.port, proxyPort, projectId);
   preview.state.status = 'running';
-  preview.state.url = `http://127.0.0.1:${proxyPort}`;
+  preview.state.port = proxyPort;
+  // Keep the path the dev server asked for: a project with a base path serves
+  // nothing at the root, and an iframe pointed there shows its own 404 page.
+  preview.state.url = `http://127.0.0.1:${proxyPort}${target.path}`;
   preview.state.error = undefined;
   changed();
 
-  log(`Preview running at ${preview.state.url} (proxying your dev server on :${port})`, 'info', {
+  log(`Preview running at ${preview.state.url} (proxying your dev server on :${target.port})`, 'info', {
     projectId,
   });
   return preview.state;
+}
+
+/**
+ * Wait for the dev server, preferring what it says over what we guessed.
+ *
+ * Polls both: the announced port the moment there is one, and the guess until
+ * then. A dev server that prints nothing still works; one that prints a
+ * surprising port now works too, which it did not before.
+ */
+async function waitForDevServer(
+  preview: PreviewProcess,
+  guessedPort: number,
+  timeoutMs: number,
+): Promise<{ port: number; path: string } | undefined> {
+  const deadline = Date.now() + timeoutMs;
+
+  while (Date.now() < deadline) {
+    const announced = preview.state.detectedUrl;
+    const announcedPort = announced ? portOf(announced) : undefined;
+
+    if (announcedPort && (await isPortOpen(announcedPort))) {
+      return { port: announcedPort, path: announced ? pathOf(announced) : '/' };
+    }
+    if (await isPortOpen(guessedPort)) {
+      return { port: guessedPort, path: '/' };
+    }
+    if (preview.state.status === 'failed') return undefined;
+
+    await new Promise((r) => setTimeout(r, 400));
+  }
+  return undefined;
 }
 
 export async function stopPreview(projectId: string): Promise<void> {
@@ -149,6 +300,7 @@ export async function stopPreview(projectId: string): Promise<void> {
   if (!preview) return;
 
   preview.proxy?.close();
+  preview.static?.close();
   if (preview.child && !preview.child.killed) {
     // A dev server usually spawns children (a bundler, a watcher). SIGTERM on
     // the shell reaches them on POSIX; on Windows the tree needs killing.
@@ -256,8 +408,15 @@ function injectOverlay(html: string, script: string): string {
   const tag = `<script data-agentic-overlay>${script}</script>`;
   // Before </body> keeps the page's own scripts running first, so the picker
   // sees the rendered DOM rather than an empty root.
-  if (html.includes('</body>')) return html.replace('</body>', `${tag}</body>`);
-  if (html.includes('</html>')) return html.replace('</html>', `${tag}</html>`);
+  //
+  // The replacement is a FUNCTION, and that is not a style preference. Given a
+  // replacement string, `String.replace` expands `$$`, `$&`, "$`" and `$'` —
+  // and the overlay contains `'__reactFiber$'`, whose `$'` was expanding to
+  // "everything after </body>". The rest of the document was spliced into the
+  // middle of a string literal, the script died on a syntax error, and the
+  // element picker silently did nothing, with no trace in any server log.
+  if (html.includes('</body>')) return html.replace('</body>', () => `${tag}</body>`);
+  if (html.includes('</html>')) return html.replace('</html>', () => `${tag}</html>`);
   return html + tag;
 }
 
@@ -312,6 +471,54 @@ export function recordNetworkError(projectId: string, entry: PreviewNetworkError
   changed();
 }
 
+/**
+ * Record an annotation the user drew on the running page.
+ *
+ * Kept on the preview rather than the project because it is about what is on
+ * screen right now: a note pointing at a button that a later edit removed is
+ * noise, and losing it when the preview restarts is the correct behaviour.
+ */
+export function addAnnotation(projectId: string, annotation: PreviewAnnotation): void {
+  const preview = previews.get(projectId);
+  if (!preview) return;
+  const existing = preview.state.annotations.findIndex((a) => a.id === annotation.id);
+  if (existing >= 0) preview.state.annotations[existing] = annotation;
+  else preview.state.annotations.unshift(annotation);
+  if (preview.state.annotations.length > MAX_ANNOTATIONS)
+    preview.state.annotations.length = MAX_ANNOTATIONS;
+  changed();
+}
+
+export function removeAnnotation(projectId: string, id: string): void {
+  const preview = previews.get(projectId);
+  if (!preview) return;
+  preview.state.annotations = preview.state.annotations.filter((a) => a.id !== id);
+  changed();
+}
+
+export function clearAnnotations(projectId: string): void {
+  const preview = previews.get(projectId);
+  if (!preview) return;
+  preview.state.annotations = [];
+  changed();
+}
+
+export function annotationsOf(projectId: string): PreviewAnnotation[] {
+  return previews.get(projectId)?.state.annotations ?? [];
+}
+
+/**
+ * Tell a static preview to reload, because a file it serves changed.
+ *
+ * Called from the file watcher. A dev server does its own hot reload and must
+ * not be poked: it would reload twice, and the second one would discard state
+ * the first one carefully preserved.
+ */
+export function reloadStaticPreview(projectId: string): void {
+  const preview = previews.get(projectId);
+  if (preview?.state.mode === 'static') preview.static?.reload();
+}
+
 export function clearPreviewTelemetry(projectId: string): void {
   const preview = previews.get(projectId);
   if (!preview) return;
@@ -360,15 +567,6 @@ function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
     socket.on('timeout', () => done(false));
     socket.on('error', () => done(false));
   });
-}
-
-async function waitForPort(port: number, timeoutMs: number): Promise<boolean> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (await isPortOpen(port)) return true;
-    await new Promise((r) => setTimeout(r, 400));
-  }
-  return false;
 }
 
 async function findFreePort(start: number): Promise<number> {

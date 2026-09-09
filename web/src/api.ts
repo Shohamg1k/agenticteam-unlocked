@@ -10,6 +10,7 @@ import type {
   MemoryNote,
   NodeConfig,
   Plan,
+  PreviewAnnotation,
   PreviewState,
   Project,
   ProjectSettings,
@@ -240,13 +241,30 @@ export const api = {
   evaluateCommand: (command: string) => post<CommandVerdict>('/commands/evaluate', { command }),
 
   // Preview
-  startPreview: (projectId: string) => post<PreviewState>('/preview/start', { projectId }),
+  startPreview: (projectId: string, entryFile?: string) =>
+    post<PreviewState>('/preview/start', { projectId, entryFile }),
   stopPreview: (projectId: string) => post('/preview/stop', { projectId }),
   clearPreview: (projectId: string) => post('/preview/clear', { projectId }),
   previewTelemetry: (projectId: string, kind: string, payload: unknown) =>
     post('/preview/telemetry', { projectId, kind, payload }),
-  scopedEdit: (projectId: string, instruction: string, target: ElementTarget) =>
-    post<{ planId: string; tasks: number }>('/preview/scoped-edit', { projectId, instruction, target }),
+  scopedEdit: (
+    projectId: string,
+    instruction: string,
+    target?: ElementTarget,
+    annotations?: PreviewAnnotation[],
+  ) =>
+    post<{ planId: string; tasks: number }>('/preview/scoped-edit', {
+      projectId,
+      instruction,
+      target,
+      annotations,
+    }),
+  addAnnotation: (projectId: string, annotation: PreviewAnnotation) =>
+    post<{ annotations: PreviewAnnotation[] }>('/preview/annotations', { projectId, ...annotation }),
+  removeAnnotation: (projectId: string, id: string) =>
+    del<{ annotations: PreviewAnnotation[] }>(`/preview/annotations/${id}?projectId=${projectId}`),
+  clearAnnotations: (projectId: string) =>
+    post<{ annotations: PreviewAnnotation[] }>('/preview/annotations/clear', { projectId }),
 
   // Connectors
   connectors: () => get('/connectors'),

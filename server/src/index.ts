@@ -17,7 +17,7 @@ import { loadPlugins } from './plugins.js';
 import { disconnectAll, loadConnectors, refreshConnectors } from './connectors/index.js';
 import { onRunEvent } from './orchestrator.js';
 import { closeAllTerminals, subscribeTerminal, resizeTerminal, writeTerminal } from './pty.js';
-import { stopAllPreviews } from './preview.js';
+import { reloadStaticPreview, stopAllPreviews } from './preview.js';
 import { stopAllWatchers, watchProject } from './fsapi.js';
 import { loadSkills, loadAgents } from './skills.js';
 import { loadMemory } from './memory.js';
@@ -263,6 +263,11 @@ export async function startServer(): Promise<{ port: number; close: () => Promis
       for (const session of sessions) {
         send(session, { type: 'fs:changed', projectId: ps.projectId, paths });
       }
+      // A static preview has no build step and no hot reload of its own, so a
+      // changed file only reaches the browser if something tells it to look
+      // again. A dev server is left alone — it reloads itself, and a second
+      // reload would throw away the state it just took care to keep.
+      reloadStaticPreview(ps.projectId);
     });
   };
   watchActiveProject();

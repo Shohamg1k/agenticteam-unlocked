@@ -98,6 +98,20 @@ export interface UsageRollup {
   baselineCostUsd: number;
 }
 
+/**
+ * How a project gets previewed.
+ *
+ * `static` is the Live Server case: the project is HTML, CSS and JS that a
+ * browser can open directly, and running `npm run dev` on it would be both
+ * unnecessary and impossible. `dev-server` is everything with a build step.
+ *
+ * The distinction matters because the failure modes are opposite. A static
+ * project fails when we insist on a dev server it does not have; a framework
+ * project fails when we serve its source unbuilt and the browser is handed
+ * JSX.
+ */
+export type PreviewMode = 'static' | 'dev-server';
+
 export interface PreviewState {
   projectId: string;
   status: 'stopped' | 'starting' | 'running' | 'failed';
@@ -105,10 +119,53 @@ export interface PreviewState {
   port?: number;
   command?: string;
   error?: string;
+  /** Which kind of preview this is. Drives the button's label and behaviour. */
+  mode?: PreviewMode;
+  /**
+   * Static mode: the HTML file being served, relative to the project root.
+   * This is what makes the preview open the user's page rather than a
+   * directory listing.
+   */
+  entryFile?: string;
+  /** Static mode: every HTML file found, so the user can switch page. */
+  htmlFiles?: string[];
+  /**
+   * Dev-server mode: the URL the dev server itself printed.
+   *
+   * Authoritative, and different from the guessed one more often than not — a
+   * port collision moves Vite to 5174, Next to 3001, and a guess then waits
+   * sixty seconds for a port nobody is listening on before failing.
+   */
+  detectedUrl?: string;
   /** Last N console lines captured from the previewed page. */
   consoleLines: PreviewConsoleLine[];
   /** Recent failed network requests from the previewed page. */
   networkErrors: PreviewNetworkError[];
+  /** Notes the user drew on the running page. */
+  annotations: PreviewAnnotation[];
+}
+
+/**
+ * A note the user drew on the running page.
+ *
+ * The point of annotating rather than describing is that pointing is precise:
+ * "this button" plus a rectangle around it removes the entire class of
+ * misunderstanding where the agent changes a different button. So an annotation
+ * always carries a resolved element target where one exists, and its geometry
+ * relative to the page regardless.
+ */
+export interface PreviewAnnotation {
+  id: string;
+  kind: 'note' | 'box' | 'arrow';
+  /** What the user wrote. Empty while they are still drawing it. */
+  text: string;
+  /** Page coordinates, so the drawing can be restored on reload. */
+  rect: { x: number; y: number; width: number; height: number };
+  /** The element under the annotation, when one could be resolved. */
+  target?: ElementTarget;
+  /** Which page it was drawn on, for a multi-page static site. */
+  pageUrl?: string;
+  createdAt: number;
 }
 
 export interface PreviewConsoleLine {
@@ -184,7 +241,16 @@ export interface ScopedEditRequest {
   /** What the user typed. */
   instruction: string;
   /** Where they clicked, resolved by the preview overlay. */
-  target: ElementTarget;
+  target?: ElementTarget;
+  /**
+   * Annotations to act on instead of, or as well as, a single target.
+   *
+   * A round of visual feedback is usually several notes at once — "this is too
+   * cramped", "wrong colour", "move this below" — and sending them as one
+   * request is both faster and better, because the agent can see them together
+   * and make one coherent change rather than three conflicting ones.
+   */
+  annotations?: PreviewAnnotation[];
 }
 
 /**
