@@ -147,7 +147,14 @@ export async function packContext(opts: PackOptions): Promise<ContextPack> {
   if (mapText) stableParts.push(track('code map', `\n${mapText}`));
 
   if (opts.skills?.length) {
-    const skillText = renderSkills(opts.skills, budgetFor('skills'));
+    // Skills get a floor rather than a share. On a lean pack the code map and
+    // the file contents are skipped entirely, so the space they would have
+    // taken is free — and spending it on "here is what finished UI looks like"
+    // is a far better use than leaving it unused. Scaling this budget down with
+    // everything else meant the fast profile, which is exactly where a
+    // single-page app lands, got no craft guidance at all.
+    const skillBudget = rich ? budgetFor('skills') : 1_800;
+    const skillText = renderSkills(opts.skills, skillBudget);
     if (skillText) stableParts.push(track('skills', `\n${skillText}`));
   }
 

@@ -13,5 +13,6 @@ export * from './routing.js';
 export * from './artifacts.js';
 export * from './roles.js';
 export * from './profiles.js';
+export * from './matching.js';
 export * from './ids.js';
 export * from './protocol.js';

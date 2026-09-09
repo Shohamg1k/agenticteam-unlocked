@@ -1,7 +1,9 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
 import type {
+  AgentProfile,
   AgentRunEvent,
+  Capability,
   FileArtifact,
   PhaseId,
   Plan,
@@ -29,7 +31,7 @@ import { buildCodeMap } from './codemap.js';
 import type { CodeMap } from './codemap.js';
 import { packContext } from './contextpack.js';
 import type { ExecutionProfile } from '@agentic/core';
-import { applyOverrides, profileFor } from '@agentic/core';
+import { applyOverrides, profileFor, selectAgent } from '@agentic/core';
 import { getProvider } from './providers/index.js';
 import { recordOutcome, routeTask, activePolicy } from './router.js';
 import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
@@ -41,7 +43,8 @@ import { collectWorktreeChanges, createWorktree } from './git.js';
 import type { Worktree } from './git.js';
 import { startCooldown } from './quota.js';
 import { addMemory } from './memory.js';
-import { activeSkillsFor } from './skills.js';
+import { activeSkillsFor, loadAgents } from './skills.js';
+import { DEFAULT_AGENT_BY_CAPABILITY } from './library/agents.js';
 import { getProject } from './projects.js';
 import { changed, projectState, savePlan, tasksOfPlan } from './store.js';
 import { describeError, log } from './log.js';
@@ -515,10 +518,32 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
   const ps = projectState(run.projectId);
   if (!ps) return;
 
-  const rolePrompt = task.role
-    ? (ROLES_BY_ID.get(task.role)?.systemPrompt ?? INSTANT_WORKER_PROMPT)
-    : INSTANT_WORKER_PROMPT;
-  const skills = activeSkillsFor(run.projectId, task);
+  /**
+   * Who does this task.
+   *
+   * Three sources, most specific first. A matched specialist beats the role
+   * prompt, which beats the generic worker — because "you are a database
+   * engineer, and here is what usually goes wrong in a migration" changes the
+   * output in a way that "you are a senior engineer" does not.
+   *
+   * `selectAgent` returns nothing unless a profile clearly fits, and that is
+   * the common case rather than a failure: most tasks are not specialist work,
+   * and a nearly-right specialist is worse than none, because it makes the
+   * model confident about the wrong domain.
+   */
+  const roster = loadAgents(run.projectId);
+  const specialist =
+    selectAgent(roster, task) ??
+    fallbackSpecialist(roster, task.capability);
+  const rolePrompt =
+    specialist?.agent.systemPrompt ??
+    (task.role
+      ? (ROLES_BY_ID.get(task.role)?.systemPrompt ?? INSTANT_WORKER_PROMPT)
+      : INSTANT_WORKER_PROMPT);
+
+  if (specialist) {
+    worklog(task, 'orchestrator', `Handing this to the ${specialist.agent.name} — ${specialist.reason}.`);
+  }
 
   /**
    * How hard to try, decided once per task.
@@ -542,6 +567,16 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
     `Running this on the "${profile.name}" profile` +
       (profile.tools ? '' : ' — one shot, no tool loop') +
       (profile.projectChecks ? '' : '; project checks are skipped for a task this small'),
+  );
+
+  // A lean profile gets fewer skills, not smaller ones. Truncating guidance
+  // mid-sentence produces advice that is worse than absent; taking the best
+  // three instead of the best six keeps each one intact.
+  const skills = activeSkillsFor(
+    run.projectId,
+    task,
+    profile.richContext ? 6 : 3,
+    specialist?.agent.skills,
   );
 
   /** Providers already tried for this task; excluded from re-routing. */
@@ -712,6 +747,18 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
   task.status = 'failed';
   task.error = `Gave up after ${task.attempts.length} attempts across ${triedProviders.size || 1} provider(s).`;
   worklog(task, 'orchestrator', task.error, 'error');
+}
+
+/**
+ * The specialist for a capability when no profile matched by keyword.
+ *
+ * See `DEFAULT_AGENT_BY_CAPABILITY` for why this is frontend-only.
+ */
+function fallbackSpecialist(roster: AgentProfile[], capability: Capability) {
+  const name = DEFAULT_AGENT_BY_CAPABILITY[capability];
+  if (!name) return undefined;
+  const agent = roster.find((a) => a.name === name && a.enabled);
+  return agent ? { agent, score: 0, reason: `the default for ${capability} work` } : undefined;
 }
 
 /**
