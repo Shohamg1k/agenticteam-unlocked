@@ -57,6 +57,20 @@ describe('overlapScore', () => {
     // "api" inside "rapid" would otherwise send every task to the API agent.
     expect(overlapScore(['api'], 'rapid prototyping')).toBe(0);
   });
+
+  it('matches an inflection but not a different word that starts the same', () => {
+    // The real one: a pomodoro TIMER was handed to the performance engineer,
+    // because "timer" starts with the "time" in "load time". Being nearly
+    // right about a specialist is worse than being unsure — the prompt then
+    // makes the model confident about the wrong domain.
+    expect(overlapScore(['timer'], 'latency and load time')).toBe(0);
+    expect(overlapScore(['react'], 'reactive streams')).toBe(0);
+
+    // These still have to work, or the matcher stops finding anything.
+    expect(overlapScore(['migration'], 'migrations run against live data')).toBeGreaterThan(0);
+    expect(overlapScore(['refactor'], 'refactoring without changing behaviour')).toBeGreaterThan(0);
+    expect(overlapScore(['test'], 'tests and testing')).toBeGreaterThan(0);
+  });
 });
 
 describe('rankSkills', () => {

@@ -61,19 +61,38 @@ export function overlapScore(queryTerms: string[], candidateText: string): numbe
       score += 1;
       continue;
     }
-    // A shorter term inside a longer one — "react" in "reactive" is a false
-    // positive, so require the candidate term to start with the query term and
-    // the query term to be substantial.
-    if (term.length >= 5) {
-      for (const c of candidate) {
-        if (c.startsWith(term) || term.startsWith(c)) {
-          score += 0.5;
-          break;
-        }
+    // The same word in another form. Only an inflection counts: a bare prefix
+    // match let "timer" match the "time" in "load time", and a pomodoro timer
+    // was handed to the performance engineer on the strength of it. Being
+    // nearly right about which specialist to use is worse than being unsure,
+    // because the prompt then makes the model confident about the wrong domain.
+    for (const c of candidate) {
+      if (sameWord(term, c)) {
+        score += 0.5;
+        break;
       }
     }
   }
   return score;
+}
+
+/**
+ * Are these two the same word in different forms?
+ *
+ * A deliberately small stemmer: only the suffixes that mean "same word,
+ * different form". Anything cleverer would need a real stemming library in
+ * shared code to buy back a handful of matches, and anything looser is what
+ * produced "timer" matching "time".
+ */
+const INFLECTIONS = ['s', 'es', 'ed', 'd', 'ing', 'er', 'ers'];
+
+function sameWord(a: string, b: string): boolean {
+  if (a === b) return true;
+  const [shorter, longer] = a.length <= b.length ? [a, b] : [b, a];
+  // Below this, a suffix is most of the word and the match means nothing.
+  if (shorter.length < 4) return false;
+  if (!longer.startsWith(shorter)) return false;
+  return INFLECTIONS.includes(longer.slice(shorter.length));
 }
 
 export interface SkillMatch {
