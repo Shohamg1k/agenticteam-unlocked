@@ -58,6 +58,30 @@ export async function initVault(): Promise<VaultBackend> {
   if (initialised) return backend;
   initialised = true;
 
+  /**
+   * A hermetic run gets a hermetic vault.
+   *
+   * `AGENTIC_DATA_DIR` isolates the projects, the plans and the quota ledger,
+   * but it cannot isolate the OS keychain — that is shared per user, by design.
+   * So an end-to-end run on a developer machine saw their real API keys, and a
+   * test asserting "an unconfigured provider explains how to configure it"
+   * failed on the developer who had configured it. The test was right and the
+   * isolation was incomplete.
+   *
+   * `memory` also has a use beyond tests: a sandbox or a shared machine where
+   * writing a credential anywhere durable would be wrong.
+   */
+  const forced = process.env.AGENTIC_VAULT;
+  if (forced === 'memory') {
+    backend = 'memory';
+    log('Vault running in memory only — credentials will not be saved', 'warn');
+    return backend;
+  }
+  if (forced === 'encrypted-file') {
+    backend = 'encrypted-file';
+    return backend;
+  }
+
   try {
     const mod = (await import(KEYRING_MODULE)) as unknown as KeyringModule;
     // Prove it actually works before trusting it: on Linux without a running
@@ -171,6 +195,11 @@ export function getSecret(providerId: string, account = 'default'): string | und
   const cached = cache.get(key);
   if (cached) return cached;
 
+  if (backend === 'memory') {
+    // The cache IS the vault here; a miss means there is nothing to find.
+    return undefined;
+  }
+
   if (backend === 'keychain' && keyring) {
     try {
       const value = new keyring.Entry(SERVICE, key).getPassword();
@@ -211,7 +240,9 @@ export function setSecret(providerId: string, value: string, account = 'default'
     return;
   }
 
-  if (backend === 'keychain' && keyring) {
+  if (backend === 'memory') {
+    // Nothing to write. The cache set below is the whole storage.
+  } else if (backend === 'keychain' && keyring) {
     new keyring.Entry(SERVICE, key).setPassword(trimmed);
   } else {
     const all = readFileVault();
@@ -226,7 +257,9 @@ export function deleteSecret(providerId: string, account = 'default'): void {
   const key = secretKey(providerId, account);
   cache.delete(key);
 
-  if (backend === 'keychain' && keyring) {
+  if (backend === 'memory') {
+    // The cache delete above was the whole operation.
+  } else if (backend === 'keychain' && keyring) {
     try {
       new keyring.Entry(SERVICE, key).deletePassword();
     } catch {

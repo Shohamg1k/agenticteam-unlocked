@@ -16,10 +16,12 @@ import {
   IconChat,
   IconFiles,
   IconInbox,
+  IconPreview,
   IconProviders,
   IconSearch,
   IconSettings,
   IconTasks,
+  IconTerminal,
 } from './Icons.js';
 
 /**
@@ -168,6 +170,31 @@ export function AppShell() {
           onClick={() => tabs.open({ kind: 'chat', title: 'Chat' })}
         >
           <IconChat size={20} />
+        </button>
+        {/*
+          The preview and the terminal were reachable only by knowing they
+          existed: the terminal by one keyboard shortcut, and the preview by
+          nothing at all. No button anywhere opened a preview tab, so the whole
+          feature — dev server, element picker, annotations — was unreachable in
+          the built app. A feature with no way in is not a feature.
+        */}
+        <button
+          type="button"
+          className="rail__button"
+          title="Preview"
+          aria-label="Preview"
+          onClick={() => openTab(tabs, 'preview')}
+        >
+          <IconPreview size={20} />
+        </button>
+        <button
+          type="button"
+          className="rail__button"
+          title="Terminal"
+          aria-label="Terminal"
+          onClick={() => openTab(tabs, 'terminal')}
+        >
+          <IconTerminal size={20} />
         </button>
         <button
           type="button"

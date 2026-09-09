@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import type { ElementTarget, PreviewAnnotation } from '@agentic/core';
+import type { ElementTarget } from '@agentic/core';
 import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { IconPlay, IconRefresh, IconStop, IconTarget } from '../shell/Icons.js';

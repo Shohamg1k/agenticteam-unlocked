@@ -6,8 +6,9 @@ import path from 'node:path';
  *
  * They run against the real core service and the real renderer, with an
  * isolated data directory so a developer's own projects and keys are never
- * touched by a test run. That isolation is the reason `AGENTIC_DATA_DIR`
- * exists as an override at all.
+ * touched by a test run. That isolation is the reason `AGENTIC_DATA_DIR` and
+ * `AGENTIC_VAULT` exist as overrides at all — the first isolates the data, the
+ * second the credentials, and only both together make a run hermetic.
  *
  * Deliberately smoke-level: these prove the app boots, connects, renders and
  * responds. Behaviour that can be tested without a browser is tested in Vitest,
@@ -45,6 +46,12 @@ export default defineConfig({
       env: {
         AGENTIC_PORT: String(E2E_PORT),
         AGENTIC_DATA_DIR: dataDir,
+        // The data directory isolates projects and the quota ledger; it cannot
+        // isolate the OS keychain, which is shared per user. Without this, a
+        // run on a machine with real API keys saw them, and the assertion that
+        // an unconfigured provider explains how to configure it failed on
+        // whoever had configured it.
+        AGENTIC_VAULT: 'memory',
       },
     },
     {
