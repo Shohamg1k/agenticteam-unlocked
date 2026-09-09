@@ -1,0 +1,13 @@
+{
+  // `@agentic/core` resolves through the npm-workspace symlink to
+  // packages/core/dist, so core must be built before the server typechecks.
+  // `npm run build` and `npm run dev` at the root both do that first.
+  "extends": "../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "dist",
+    "rootDir": "src",
+    "types": ["node"],
+    "lib": ["ES2022", "DOM"]
+  },
+  "include": ["src/**/*"]
+}

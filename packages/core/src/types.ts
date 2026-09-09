@@ -430,10 +430,15 @@ export interface VerificationCheck {
   /** The command that ran, when the check shelled out. */
   command?: string;
   ok: boolean;
+  /** Why this check did not run. A skipped check is never reported as passed. */
   skipped?: string;
   exitCode?: number | null;
   durationMs: number;
   issues: VerificationIssue[];
+  /** File-based checks: how many files were actually inspected. */
+  checked?: number;
+  /** File-based checks: files of a type this check cannot inspect. Not a failure. */
+  skippedCount?: number;
 }
 
 export interface VerificationReport {

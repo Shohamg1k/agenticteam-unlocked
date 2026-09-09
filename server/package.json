@@ -1,0 +1,35 @@
+{
+  "name": "@agentic/server",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "start": "tsx src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@agentic/core": "*",
+    "@anthropic-ai/sdk": "^0.124.0",
+    "@google/genai": "^2.21.0",
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "chokidar": "^4.0.3",
+    "esbuild": "^0.24.2",
+    "express": "^4.21.2",
+    "openai": "^7.12.1",
+    "ws": "^8.18.0"
+  },
+  "optionalDependencies": {
+    "@napi-rs/keyring": "^1.1.6",
+    "node-pty": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^22.10.5",
+    "@types/ws": "^8.5.13",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.3"
+  }
+}
