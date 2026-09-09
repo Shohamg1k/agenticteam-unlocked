@@ -18,9 +18,48 @@ import { describeError, log } from './log.js';
  * behaves differently is a worse outcome than one that tells you why.
  */
 
-import type * as NodePty from 'node-pty';
+/**
+ * The slice of node-pty this module uses, declared locally.
+ *
+ * node-pty is an `optionalDependency` — the app runs without it, falling back
+ * to a piped shell. Importing its types would make an optional runtime
+ * dependency a mandatory compile-time one, so a machine (or a CI job) without
+ * the native build could not even typecheck. Declaring the shape here keeps
+ * "optional" true at every level.
+ *
+ * The trade is that this can drift from the real API. It is four members, and
+ * a drift shows up as an immediate runtime failure on the very first terminal,
+ * not as a subtle bug.
+ */
+interface PtyProcess {
+  onData(listener: (data: string) => void): void;
+  onExit(listener: (event: { exitCode: number; signal?: number }) => void): void;
+  write(data: string): void;
+  resize(columns: number, rows: number): void;
+  kill(signal?: string): void;
+}
 
-type PtyModule = typeof NodePty;
+interface PtyModule {
+  spawn(
+    file: string,
+    args: string[] | string,
+    options: {
+      name?: string;
+      cols?: number;
+      rows?: number;
+      cwd?: string;
+      env?: Record<string, string>;
+    },
+  ): PtyProcess;
+}
+
+/**
+ * Held in a variable so TypeScript does not resolve it statically.
+ * `node-pty` is an optionalDependency: a machine without the native build
+ * must still compile this file, and a literal specifier would make the
+ * optional dependency a mandatory compile-time one.
+ */
+const PTY_MODULE = 'node-pty';
 
 let ptyModule: PtyModule | null = null;
 let ptyChecked = false;
@@ -30,7 +69,7 @@ async function loadPty(): Promise<PtyModule | null> {
   if (ptyChecked) return ptyModule;
   ptyChecked = true;
   try {
-    ptyModule = await import('node-pty');
+    ptyModule = (await import(PTY_MODULE)) as unknown as PtyModule;
   } catch (err) {
     ptyModule = null;
     ptyError = describeError(err);
@@ -141,7 +180,7 @@ export async function createTerminal(opts: CreateTerminalOptions): Promise<Termi
     });
 
     proc.onData(record);
-    proc.onExit(({ exitCode }) => finish(exitCode));
+    proc.onExit(({ exitCode }: { exitCode: number }) => finish(exitCode));
 
     terminals.set(id, {
       info,

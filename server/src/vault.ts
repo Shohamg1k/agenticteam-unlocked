@@ -39,6 +39,14 @@ interface KeyringModule {
   };
 }
 
+/**
+ * Held in a variable so TypeScript does not resolve it statically.
+ * `@napi-rs/keyring` is an optionalDependency: a machine without the native build
+ * must still compile this file, and a literal specifier would make the
+ * optional dependency a mandatory compile-time one.
+ */
+const KEYRING_MODULE = '@napi-rs/keyring';
+
 let keyring: KeyringModule | null = null;
 let backend: VaultBackend = 'encrypted-file';
 let initialised = false;
@@ -51,7 +59,7 @@ export async function initVault(): Promise<VaultBackend> {
   initialised = true;
 
   try {
-    const mod = (await import('@napi-rs/keyring')) as unknown as KeyringModule;
+    const mod = (await import(KEYRING_MODULE)) as unknown as KeyringModule;
     // Prove it actually works before trusting it: on Linux without a running
     // Secret Service the import succeeds and every call throws.
     const probe = new mod.Entry(SERVICE, '__agentic_probe__');
