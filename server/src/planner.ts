@@ -16,6 +16,7 @@ import {
   ROLE_DEFINITIONS,
   newPlanId,
   newTaskId,
+  plannerProfile,
   validateGraph,
 } from '@agentic/core';
 import { buildCodeMap, renderCodeMap } from './codemap.js';
@@ -92,27 +93,71 @@ export interface PlanResult {
 // Prompt
 // ---------------------------------------------------------------------------
 
+/**
+ * The complexity rubric.
+ *
+ * Shared by both modes because it is not a matter of taste: `complexity` is now
+ * load-bearing. It selects the execution profile, which selects the model tier,
+ * the reasoning effort, whether the agent gets a tool loop, and whether the
+ * project's own test suite runs afterwards. A calculator scored 3 instead of 2
+ * once, and the difference was two extra minutes of an agent exploring an empty
+ * repository for a file it was about to create.
+ *
+ * So the rubric is concrete and anchored on examples rather than adjectives.
+ * "Moderate" means nothing to a model; "one file, no dependencies, no existing
+ * code to fit into" means one thing.
+ */
+const COMPLEXITY_RUBRIC = `## Scoring complexity
+
+"complexity" is 1-5 and it is not a label — it decides how much model, how much
+reasoning effort, and how much verification the task gets. Over-scoring wastes
+minutes per task; under-scoring hands hard work to a weak configuration. Score
+the work in front of you, not the impressiveness of the goal.
+
+1 — Mechanical. A rename, a config value, a constant, a copy change. No
+    judgement required; a careful person does it without thinking.
+2 — Self-contained. One or two files written from a clear brief, no existing
+    code to fit into, no shared interfaces. A single-page app, a utility module,
+    a component with obvious props, a CRUD endpoint over a defined schema.
+3 — Integrative. Must fit existing code, or implement a contract another task
+    depends on, or touch several files that have to agree with each other.
+4 — Design-bearing. Data modelling, a non-obvious algorithm, concurrency, state
+    machines, migrations, auth flows. Getting it wrong is expensive to unwind.
+5 — The hard part of the whole job. If more than one task in your plan is a 5,
+    at most one of them really is.
+
+Most tasks in a small plan are 2. A greenfield single-file deliverable is a 2
+even when the finished thing looks impressive.`;
+
 const INSTANT_RULES = `## How to decompose (Instant mode)
 
-Optimise for wall-clock and token spend. This is the fast lane.
+Optimise for wall-clock and token spend. This is the fast lane, and the user
+chose it because they want a working result in a minute, not a process.
 
 - Size the plan to the goal. A one-line change is ONE task. A small feature is
-  2-4. A whole application is 8-14. Never pad a small job into a big plan.
-- If the goal touches more than one component, the FIRST task must pin the
-  shared structure — stack, folder layout, data model, and the interfaces the
-  others implement — and every other task must depend on it. Parallel agents
+  2-4. A whole application is 8-14. Never pad a small job into a big plan: each
+  task costs a model call, a verification pass and a hand-off, so a plan with
+  four tasks where one would do is four times slower for the same output.
+- ONE task is the right answer more often than it feels. If a single agent could
+  produce the whole deliverable in one pass — a single-page app, a script, a
+  component and its test — that is one task, not four.
+- If the goal genuinely touches more than one component, the FIRST task must pin
+  the shared structure — stack, folder layout, data model, and the interfaces
+  the others implement — and every other task must depend on it. Parallel agents
   that each invent a folder structure produce work that cannot be merged.
 - After that, split along seams that let tasks run AT THE SAME TIME: per layer,
   per module, per feature. Two tasks that touch the same file must be ordered
   with dependsOn, never run in parallel.
 - Set "files" on every task: the paths that task will create or change. This is
   what the scheduler uses to stop two agents editing one file. Be accurate;
-  under-declaring causes conflicts and over-declaring causes false serialisation.`;
+  under-declaring causes conflicts and over-declaring causes false
+  serialisation, which quietly turns a parallel plan into a sequential one.`;
 
 const PROFESSIONAL_RULES = `## How to decompose (Full Professional mode)
 
 This is the thorough lane. The user asked for a real SDLC with artefacts and
-gates, so produce one — but size it to the goal, not to the ceremony.
+gates, so produce one — but size it to the goal, not to the ceremony. A plan
+whose documentation outweighs its software has failed at being professional.
 
 - Assign every task a "phase": discovery, design, implementation, verification,
   or release. Phases run in that order and each must complete before the next
@@ -125,7 +170,12 @@ gates, so produce one — but size it to the goal, not to the ceremony.
   the changelog.
 - Every implementation task must depend on the design task that pins its
   interfaces. This is what lets several engineers work at once without
-  colliding.
+  colliding, and it is the single most important edge in the graph.
+- Give the design task a real contract to produce: the folder tree, the data
+  model, and the exact signatures the implementation tasks will code against.
+  "Design the architecture" produces prose; "produce docs/ARCHITECTURE.md
+  pinning the file tree, the entity fields, and every endpoint's request and
+  response shape" produces something the next agent can obey.
 - Set "files" on every task so the scheduler can lock them.`;
 
 function plannerPrompt(opts: {
@@ -151,6 +201,8 @@ against a real codebase, then merges.
 Your plan is executed literally. Vagueness becomes a merge conflict.
 
 ${opts.mode === 'professional' ? PROFESSIONAL_RULES : INSTANT_RULES}
+
+${COMPLEXITY_RUBRIC}
 
 ## Choosing a model for each task
 
@@ -207,7 +259,7 @@ around it:
 
 Rules for the JSON:
 - "id" is any unique string; "dependsOn" references those ids.
-- "complexity" is 1-5. 5 means "this is the hard part of the whole job".
+- "complexity" is 1-5, scored by the rubric above. It is load-bearing, not decorative.
 - The graph must be acyclic. A task may not depend on itself.
 - Return between 1 and 20 tasks.`;
 }
@@ -298,10 +350,13 @@ export async function createPlan(opts: PlanRequestOptions): Promise<PlanResult> 
         model: decision.chosen.model.id,
         system:
           'You are a senior engineering lead who decomposes work for a team of parallel AI agents. ' +
+          'You know that the cost of a plan is paid by every task in it, so you produce the smallest ' +
+          'graph that genuinely does the job, and you score each task honestly rather than generously. ' +
           'You always reply with a single valid JSON object and nothing else.',
         messages: [{ role: 'user', content: prompt }],
         maxOutputTokens: 16_000,
         cwd: ps.root,
+        profile: plannerProfile(opts.mode),
       },
       controller.signal,
     )) {

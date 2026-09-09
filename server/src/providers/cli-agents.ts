@@ -1,15 +1,17 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
+import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentRunError,
   AgentRunEvent,
   CompletionRequest,
   ExecuteRequest,
+  ExecutionProfile,
   ModelDescriptor,
   ProviderProbeResult,
 } from '@agentic/core';
 import { estimateTokens, looksLikeQuotaError } from '@agentic/core';
 import { BaseAdapter, errorMessage, guardStream, isAbortError } from './base.js';
-import { ARTIFACT_FORMAT_INSTRUCTIONS } from '@agentic/core';
+import { ARTIFACT_FORMAT_INSTRUCTIONS, NO_TOOLS_INSTRUCTIONS } from '@agentic/core';
 
 /**
  * CLI coding agents as provider adapters.
@@ -57,6 +59,36 @@ export interface CliAgentConfig {
   timeoutMs: number;
   /** Where to get it, shown when it is not installed. */
   installHint: string;
+  /**
+   * How this CLI exposes speed/quality controls, when it exposes any.
+   *
+   * Only filled in for agents whose flags have actually been run against the
+   * installed binary. An unrecognised flag makes these CLIs exit non-zero, so
+   * a guessed entry here would turn every task on that provider into a hard
+   * failure — leaving it undefined just means the profile has no lever to pull
+   * and the agent runs at its default, which is what happened before profiles
+   * existed. Fill one in after checking `--help` on a real install.
+   */
+  tuning?: CliTuning;
+}
+
+export interface CliTuning {
+  /** Flag that picks a model, and the alias for each profile tier. */
+  model?: { flag: string; tiers: Record<ExecutionProfile['tier'], string> };
+  /** Flag that picks reasoning effort, and the value for each level. */
+  effort?: { flag: string; values: Partial<Record<ExecutionProfile['effort'], string>> };
+  /**
+   * Args that turn the agentic loop off, leaving a single completion.
+   *
+   * This is the flag that matters. Measured on `make a calculator` with Claude
+   * Code: 227s with the loop, 25s without, both producing a complete working
+   * calculator. With the loop off the agent cannot write files itself, so it
+   * answers with FILE: blocks and the orchestrator writes them — which is the
+   * reviewable path anyway.
+   */
+  noTools?: string[];
+  /** Args worth adding to any one-shot run, profile or not. */
+  oneShot?: string[];
 }
 
 export const CLI_AGENTS: CliAgentConfig[] = [
@@ -73,6 +105,15 @@ export const CLI_AGENTS: CliAgentConfig[] = [
     throughputTps: 40,
     timeoutMs: 20 * 60_000,
     installHint: 'Install with: npm i -g @anthropic-ai/claude-code, then run `claude` once to sign in',
+    // Verified against the installed binary's --help. Note the deliberate
+    // absence of `--bare`: it forces ANTHROPIC_API_KEY-only auth, which would
+    // break the subscription sign-in that makes this provider free.
+    tuning: {
+      model: { flag: '--model', tiers: { small: 'haiku', mid: 'sonnet', large: 'opus' } },
+      effort: { flag: '--effort', values: { low: 'low', medium: 'medium', high: 'high', xhigh: 'xhigh' } },
+      noTools: ['--tools', ''],
+      oneShot: ['--no-session-persistence'],
+    },
   },
   {
     id: 'codex',
@@ -204,11 +245,56 @@ export class CliAgentAdapter extends BaseAdapter {
         runId: request.runId,
         model: request.model,
         system: request.system,
-        messages: [{ role: 'user', content: `${request.context}\n\n${ARTIFACT_FORMAT_INSTRUCTIONS}` }],
+        // The profile has to be forwarded explicitly. It was not, once, and the
+        // symptom was silent: every flag except the always-on ones vanished,
+        // the agent ran its full loop, and the only visible evidence was that
+        // tasks took four minutes while the worklog said "fast profile".
+        profile: request.profile,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              request.context,
+              // Only when the loop is off. With tools available the agent can
+              // and should write files itself, and telling it otherwise would
+              // throw away the thing it is good at.
+              request.profile && !request.profile.tools ? NO_TOOLS_INSTRUCTIONS : '',
+              ARTIFACT_FORMAT_INSTRUCTIONS,
+            ]
+              .filter(Boolean)
+              .join('\n\n'),
+          },
+        ],
         cwd: request.cwd,
       },
       signal,
     );
+  }
+
+  /**
+   * Translate a profile into this agent's own flags.
+   *
+   * Public and pure so the speed decision is testable without spawning
+   * anything. The flags ARE the feature here, and a silent typo in one would
+   * cost minutes per task while still looking like it worked.
+   */
+  tuningArgs(profile: ExecutionProfile | undefined): string[] {
+    const t = this.config.tuning;
+    if (!t) return [];
+
+    const args: string[] = [...(t.oneShot ?? [])];
+    if (!profile) return args;
+
+    if (t.model) args.push(t.model.flag, t.model.tiers[profile.tier]);
+
+    const effort = t.effort?.values[profile.effort];
+    if (t.effort && effort) args.push(t.effort.flag, effort);
+
+    // Only ever turns the loop OFF. There is no "force tools on": that is the
+    // agent's own default, and overriding it would fight its own judgement.
+    if (!profile.tools && t.noTools) args.push(...t.noTools);
+
+    return args;
   }
 
   private async *run(request: CompletionRequest, signal: AbortSignal): AsyncIterable<AgentRunEvent> {
@@ -216,11 +302,23 @@ export class CliAgentAdapter extends BaseAdapter {
     this.countRequest();
 
     const prompt = [request.system, ...request.messages.map((m) => m.content)].join('\n\n');
-    const args = [...this.config.args];
+    const args = [...this.config.args, ...this.tuningArgs(request.profile)];
     if (this.permissions === 'yolo' && this.config.skipPermissionsFlag) {
       args.push(this.config.skipPermissionsFlag);
     }
     if (this.config.promptVia === 'argv') args.push(prompt);
+
+    if (request.profile) {
+      const tuned = this.tuningArgs(request.profile);
+      yield {
+        type: 'log',
+        runId: request.runId,
+        level: 'info',
+        text:
+          `${this.name}: "${request.profile.name}" profile` +
+          (tuned.length ? ` (${tuned.join(' ')})` : ' — no tunable flags, using its own defaults'),
+      };
+    }
 
     if (this.permissions === 'manual') {
       yield {
@@ -233,12 +331,8 @@ export class CliAgentAdapter extends BaseAdapter {
       };
     }
 
-    const child = spawn(this.config.bin, args, {
+    const child = spawnCli(this.config.bin, args, {
       cwd: request.cwd ?? process.cwd(),
-      windowsHide: true,
-      // Windows resolves .cmd/.ps1 shims for npm-installed binaries only
-      // through the shell; without this every npm-global CLI is "not found".
-      shell: process.platform === 'win32',
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
     });
 
@@ -393,6 +487,97 @@ export class CliAgentAdapter extends BaseAdapter {
   }
 }
 
+/**
+ * Spawn a CLI agent with its arguments intact.
+ *
+ * The obvious implementation — `spawn(bin, args, { shell: process.platform ===
+ * 'win32' })` — is what this replaces, and it was quietly wrong in two ways.
+ * With `shell: true` Node does not quote anything: it joins the file and its
+ * arguments with single spaces and hands the string to cmd.exe. So
+ *
+ *   - an empty argument disappears. `['--tools', '']` becomes `--tools ` and
+ *     the flag arrives without its value, which is exactly the flag that makes
+ *     a task nine times faster;
+ *   - an argument containing spaces, quotes or newlines is re-split by cmd.exe
+ *     into several arguments. Every `promptVia: 'argv'` agent passes the whole
+ *     prompt that way, so on Windows those agents were being handed a prompt
+ *     chopped at every space.
+ *
+ * The shell was only ever there because npm installs its global binaries on
+ * Windows as `.cmd` shims, which cannot be executed directly. So: resolve the
+ * name first, and take the shell only when the resolved target actually needs
+ * it. A real `.exe` — which is how Claude Code installs — goes straight to
+ * CreateProcess with its arguments passed as arguments.
+ */
+export function spawnCli(
+  bin: string,
+  args: string[],
+  opts: { cwd?: string; env?: NodeJS.ProcessEnv },
+): ChildProcessWithoutNullStreams {
+  const resolved = resolveBin(bin);
+  const needsShell = resolved.kind === 'shim';
+
+  return spawn(resolved.path, needsShell ? args.map(quoteForCmd) : args, {
+    cwd: opts.cwd,
+    env: opts.env,
+    windowsHide: true,
+    shell: needsShell,
+  });
+}
+
+/**
+ * cmd.exe quoting, used only on the shim path.
+ *
+ * Enough for flags and short values. A newline cannot be represented as an
+ * argument to cmd.exe at all, which is why `spawnCli` works hard to avoid the
+ * shell rather than trying to escape its way out.
+ */
+function quoteForCmd(arg: string): string {
+  if (arg !== '' && !/[\s"^&|<>()%!]/.test(arg)) return arg;
+  return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
+}
+
+type ResolvedBin = { path: string; kind: 'exe' | 'shim' | 'unresolved' };
+
+const binCache = new Map<string, ResolvedBin>();
+
+/**
+ * Find what `bin` actually is on this machine.
+ *
+ * Cached for the process lifetime: it shells out, it is called on every run,
+ * and a CLI does not usually change shape while the app is open. A failure to
+ * resolve is cached too — as `unresolved`, which keeps the old shell behaviour
+ * so a PATH layout this does not understand still works rather than breaking.
+ */
+export function resolveBin(bin: string): ResolvedBin {
+  const cached = binCache.get(bin);
+  if (cached) return cached;
+
+  let result: ResolvedBin = { path: bin, kind: process.platform === 'win32' ? 'shim' : 'exe' };
+  try {
+    const finder = process.platform === 'win32' ? 'where' : 'which';
+    const out = spawnSync(finder, [bin], { encoding: 'utf8', windowsHide: true });
+    const first = out.stdout
+      ?.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
+    if (first) {
+      // `.cmd` and `.bat` are batch files: only cmd.exe can run them. Anything
+      // else is a real executable and can be spawned directly.
+      const isBatch = /\.(cmd|bat)$/i.test(first);
+      result = { path: first, kind: isBatch ? 'shim' : 'exe' };
+    }
+  } catch {
+    // Keep the conservative default.
+  }
+
+  binCache.set(bin, result);
+  return result;
+}
+
+/** Testing seam: forget what was resolved so a test can change PATH. */
+export function clearBinCache(): void {
+  binCache.clear();
+}
+
 /** Run a command once and collect its output. Used by probes only. */
 function runOnce(
   bin: string,
@@ -400,11 +585,7 @@ function runOnce(
   opts: { timeoutMs: number },
 ): Promise<{ stdout: string; stderr: string; code: number | null }> {
   return new Promise((resolve, reject) => {
-    const child = spawn(bin, args, {
-      windowsHide: true,
-      shell: process.platform === 'win32',
-      env: { ...process.env, NO_COLOR: '1' },
-    });
+    const child = spawnCli(bin, args, { env: { ...process.env, NO_COLOR: '1' } });
     let stdout = '';
     let stderr = '';
     let settled = false;

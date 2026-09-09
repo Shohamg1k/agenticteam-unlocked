@@ -28,10 +28,13 @@ import {
 import { buildCodeMap } from './codemap.js';
 import type { CodeMap } from './codemap.js';
 import { packContext } from './contextpack.js';
+import type { ExecutionProfile } from '@agentic/core';
+import { applyOverrides, profileFor } from '@agentic/core';
 import { getProvider } from './providers/index.js';
 import { recordOutcome, routeTask, activePolicy } from './router.js';
 import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
 import { repairFeedback, scanForSecrets, verifyArtifacts } from './verify.js';
+import { findPlaceholders, placeholderFeedback, placeholderIssues } from './placeholders.js';
 import { auditAutoAccept, checkGate, enqueueReview } from './review.js';
 import { takeCheckpoint } from './checkpoints.js';
 import { collectWorktreeChanges, createWorktree } from './git.js';
@@ -517,6 +520,30 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
     : INSTANT_WORKER_PROMPT;
   const skills = activeSkillsFor(run.projectId, task);
 
+  /**
+   * How hard to try, decided once per task.
+   *
+   * Routing picks who runs the task; this picks how hard they try. It is
+   * chosen from the task itself rather than the plan, because a plan almost
+   * always mixes a hard piece with several easy ones and charging every one of
+   * them frontier-model rates in both money and minutes is where the time went.
+   *
+   * `projectHasFiles` is the one input that is not the task's own: work that
+   * has to fit an existing codebase needs to see it, so a brownfield task never
+   * gets the lean-context treatment however simple it looks.
+   */
+  const profile = applyOverrides(
+    profileFor(task, { projectHasFiles: (run.codeMap?.totalFiles ?? 0) > 0 }),
+    getProject(run.projectId)?.settings.profileOverrides,
+  );
+  worklog(
+    task,
+    'orchestrator',
+    `Running this on the "${profile.name}" profile` +
+      (profile.tools ? '' : ' — one shot, no tool loop') +
+      (profile.projectChecks ? '' : '; project checks are skipped for a task this small'),
+  );
+
   /** Providers already tried for this task; excluded from re-routing. */
   const triedProviders = new Set<string>();
   let repairBrief: string | undefined;
@@ -537,6 +564,7 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
       skills,
       repairFeedback: repairBrief,
       codeMap: run.codeMap,
+      profile,
     });
 
     let decision = routeTask({
@@ -612,7 +640,7 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
     );
     changed();
 
-    const outcome = await runAttempt({ run, task, pack, adapter, candidate, signal, attemptNumber });
+    const outcome = await runAttempt({ run, task, pack, adapter, candidate, signal, attemptNumber, profile });
 
     if (outcome.kind === 'cancelled') {
       task.status = 'cancelled';
@@ -716,8 +744,9 @@ async function runAttempt(args: {
   candidate: RoutingCandidate;
   signal: AbortSignal;
   attemptNumber: number;
+  profile: ExecutionProfile;
 }): Promise<AttemptOutcome> {
-  const { run, task, pack, adapter, candidate, signal, attemptNumber } = args;
+  const { run, task, pack, adapter, candidate, signal, attemptNumber, profile } = args;
   const ps = projectState(run.projectId);
   if (!ps) return { kind: 'cancelled' };
 
@@ -750,7 +779,13 @@ async function runAttempt(args: {
    */
   let worktree: Worktree | undefined;
   let cwd = ps.root;
-  if (adapter.transport === 'cli') {
+
+  // An agent with no tool loop cannot write a file, so there is nothing to
+  // isolate it from. Creating and tearing down a worktree it never touches is
+  // a couple of seconds of pure overhead on exactly the tasks that are supposed
+  // to be quick.
+  const canWriteFiles = adapter.transport === 'cli' && profile.tools;
+  if (canWriteFiles) {
     try {
       worktree = await createWorktree(ps.root, `agent-${task.id}`);
       cwd = worktree.dir;
@@ -779,13 +814,22 @@ async function runAttempt(args: {
     messages: [{ role: 'user' as const, content: pack.volatile }],
     cwd,
     cachePrefix: true,
-    maxOutputTokens: Math.min(32_000, candidate.model.maxOutputTokens),
+    maxOutputTokens: Math.min(profile.maxOutputTokens, candidate.model.maxOutputTokens),
+    profile,
   };
 
   try {
     const iterator = adapter.execute
       ? adapter.execute(
-          { runId, model: candidate.model.id, task, context: pack.volatile, system: pack.stable, cwd },
+          {
+            runId,
+            model: candidate.model.id,
+            task,
+            context: pack.volatile,
+            system: pack.stable,
+            cwd,
+            profile,
+          },
           signal,
         )
       : adapter.stream(request, signal);
@@ -905,24 +949,60 @@ async function runAttempt(args: {
     tier1.issues.push(...secrets);
   }
 
+  // Files the model described instead of writing. Runs here, with the syntax
+  // gate, because a placeholder passes a parser: `[content as written above]`
+  // is legal enough as HTML, and one really did reach disk as a whole app.
+  const placeholders = findPlaceholders(files);
+  if (placeholders.length) {
+    tier1.ok = false;
+    tier1.issues.push(...placeholderIssues(placeholders));
+  }
+
   const previousRepairs = task.verification?.repairs ?? 0;
 
   if (!tier1.ok) {
     task.verification = { ok: false, tier1, tier2: [], repairs: previousRepairs + 1, at: Date.now() };
     attempt.outcome = 'verification-failed';
-    const feedback = secrets.length
-      ? `${repairFeedback(tier1)}\n\nAlso: remove the credentials found in these files and read them from environment variables instead.`
-      : repairFeedback(tier1);
+    // Placeholder feedback goes first when there is any: it explains the whole
+    // failure, whereas a parser error on a placeholder file explains a symptom.
+    const feedback = [
+      placeholders.length ? placeholderFeedback(placeholders) : repairFeedback(tier1),
+      secrets.length
+        ? 'Also: remove the credentials found in these files and read them from environment variables instead.'
+        : '',
+    ]
+      .filter(Boolean)
+      .join('\n\n');
     return { kind: 'verification-failed', feedback };
   }
 
   // ---- Tier 2: the project's own checks --------------------------------
-  const tier2 = await runProjectChecks({
-    root: ps.root,
-    files,
-    label: task.id,
-    onProgress: (message) => worklog(task, 'verification', message),
-  });
+  //
+  // Skipped on the fast profile, and recorded as skipped rather than passed.
+  // The distinction is the whole point: tier 1 has already parsed every file
+  // and scanned it for secrets, so nothing broken is being waved through — but
+  // an install plus a test run can take longer than the task did, and a task
+  // that creates one greenfield file has no project checks worth running yet.
+  const tier2 = profile.projectChecks
+    ? await runProjectChecks({
+        root: ps.root,
+        files,
+        label: task.id,
+        onProgress: (message) => worklog(task, 'verification', message),
+      })
+    : {
+        ok: true,
+        checks: [
+          {
+            name: 'project checks',
+            ok: false,
+            skipped: `Not run: this task is on the "${profile.name}" profile, where only the syntax and secret gates apply.`,
+            durationMs: 0,
+            issues: [],
+          },
+        ],
+        unavailable: undefined,
+      };
 
   if (tier2.unavailable) worklog(task, 'verification', tier2.unavailable, 'warn');
 

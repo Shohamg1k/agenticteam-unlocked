@@ -117,9 +117,33 @@ Rules:
 - Paths are relative to the project root. Never absolute, never \`..\`.
 - Emit the COMPLETE file every time. Never a diff, never a fragment, never
   "... rest unchanged". A truncated file fails the syntax gate and is sent back.
+- Never refer to content that is somewhere else. "as written above", "same as
+  before", "see the previous block" and "omitted for brevity" all produce a file
+  containing those words and nothing else. If you have already described a file
+  in prose, you still have to emit every line of it here.
 - One FILE: block per file. Re-emitting a path replaces the earlier block.
 - Prose outside the blocks is fine and is shown to the user, but only the
   blocks are written to disk.`;
+
+/**
+ * Additional instructions for an agent running without a tool loop.
+ *
+ * Worth stating outright rather than letting the agent work it out. Told only
+ * "emit FILE: blocks", a CLI agent that normally has tools still narrates as
+ * though it were editing files — "I'll create index.html now" — and then stops,
+ * having written nothing anywhere. The task then fails the no-files check and
+ * burns a whole retry learning what one sentence could have told it.
+ */
+export const NO_TOOLS_INSTRUCTIONS = `## You have no tools on this task
+
+You cannot read or write files, run commands, or browse. Everything you need is
+already in this prompt, and your reply IS the deliverable — the system writes
+your FILE: blocks to disk exactly as you emit them, and writes nothing else.
+
+So do not describe what you are about to do, and do not refer to work you think
+you have already done. Emit the files, complete, now. A reply that talks about
+files without FILE: blocks containing their full contents produces nothing at
+all, and the task is retried from the beginning.`;
 
 /**
  * Detect the fenced-block language a path should use, for prompts and for the

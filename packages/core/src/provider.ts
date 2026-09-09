@@ -1,3 +1,4 @@
+import type { ExecutionProfile } from './profiles.js';
 import type {
   AgentRunError,
   AgentRunEvent,
@@ -147,6 +148,13 @@ export interface CompletionRequest {
   tools?: ToolSchema[];
   /** Hint that this prefix is worth caching. Adapters that cannot, ignore it. */
   cachePrefix?: boolean;
+  /**
+   * How hard to try. Adapters translate this into whatever their provider
+   * exposes — a model tier, a reasoning-effort flag, whether to run a tool
+   * loop. An adapter that exposes none of it ignores this entirely, which is
+   * why it is optional rather than a required knob every adapter must fake.
+   */
+  profile?: ExecutionProfile;
 }
 
 export interface ToolSchema {
@@ -189,6 +197,8 @@ export interface ExecuteRequest {
   /** Absolute path the agent may write into. */
   cwd: string;
   tools?: ToolSchema[];
+  /** See `CompletionRequest.profile`. */
+  profile?: ExecutionProfile;
 }
 
 export interface CostEstimateRequest {

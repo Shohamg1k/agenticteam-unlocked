@@ -1,6 +1,6 @@
 import fsp from 'node:fs/promises';
 import path from 'node:path';
-import type { Plan, SkillDef, Task } from '@agentic/core';
+import type { ExecutionProfile, Plan, SkillDef, Task } from '@agentic/core';
 import { ARTIFACT_FORMAT_INSTRUCTIONS, ancestorsOf, estimateTokens } from '@agentic/core';
 import { buildCodeMap, relevantFiles, renderCodeMap } from './codemap.js';
 import type { CodeMap } from './codemap.js';
@@ -60,6 +60,14 @@ export interface PackOptions {
   repairFeedback?: string;
   /** Cached code map, so a plan does not rebuild it per task. */
   codeMap?: CodeMap;
+  /**
+   * The task's execution profile. Its `maxContextTokens` becomes the pack
+   * budget and its `richContext` decides whether the repository map and
+   * neighbouring file contents are worth including at all — a greenfield
+   * single-file task is slowed down, not helped, by being handed a tour of a
+   * codebase it is not going to touch.
+   */
+  profile?: ExecutionProfile;
 }
 
 /** Per-section ceilings. They sum to less than the default budget on purpose. */
@@ -76,7 +84,25 @@ export async function packContext(opts: PackOptions): Promise<ContextPack> {
   const ps = projectState(opts.projectId);
   if (!ps) throw new Error(`No such project: ${opts.projectId}`);
 
-  const maxTokens = opts.maxTokens ?? 60_000;
+  const maxTokens = opts.maxTokens ?? opts.profile?.maxContextTokens ?? 60_000;
+
+  /**
+   * Whether this task gets the tour of the codebase.
+   *
+   * The repository map and the relevance-ranked file contents are the two
+   * biggest sections here, and for a task creating a file that does not exist
+   * yet, in a project that has nothing in it, they are worse than useless:
+   * thousands of tokens to read before starting, on exactly the tasks that are
+   * meant to be quick. `profileFor` only turns this off for greenfield work,
+   * so a task that has to fit an existing codebase always gets to see it.
+   */
+  const rich = opts.profile?.richContext ?? true;
+
+  // Scale the per-section ceilings to the pack's own budget. Without this a
+  // 12k pack would still try to spend 12k on file contents alone.
+  const scale = Math.min(1, maxTokens / 60_000);
+  const budgetFor = (section: keyof typeof SECTION_BUDGETS) =>
+    Math.max(200, Math.round(SECTION_BUDGETS[section] * scale));
   const budget: { section: string; tokens: number }[] = [];
   const track = (section: string, text: string) => {
     const tokens = estimateTokens(text);
@@ -114,14 +140,14 @@ export async function packContext(opts: PackOptions): Promise<ContextPack> {
     .join('\n');
   stableParts.push(track('project profile', projectSection));
 
-  const memory = bindingMemory(opts.projectId, SECTION_BUDGETS.memory);
+  const memory = bindingMemory(opts.projectId, budgetFor('memory'));
   if (memory) stableParts.push(track('binding memory', `\n${memory}`));
 
-  const mapText = renderCodeMap(codeMap, SECTION_BUDGETS.codeMap);
-  stableParts.push(track('code map', `\n${mapText}`));
+  const mapText = rich ? renderCodeMap(codeMap, budgetFor('codeMap')) : '';
+  if (mapText) stableParts.push(track('code map', `\n${mapText}`));
 
   if (opts.skills?.length) {
-    const skillText = renderSkills(opts.skills, SECTION_BUDGETS.skills);
+    const skillText = renderSkills(opts.skills, budgetFor('skills'));
     if (skillText) stableParts.push(track('skills', `\n${skillText}`));
   }
 
@@ -180,7 +206,7 @@ export async function packContext(opts: PackOptions): Promise<ContextPack> {
         .filter(Boolean)
         .join('\n');
       const cost = estimateTokens(block);
-      if (used + cost > SECTION_BUDGETS.contracts) break;
+      if (used + cost > budgetFor('contracts')) break;
       lines.push(block);
       used += cost;
     }
@@ -204,16 +230,22 @@ export async function packContext(opts: PackOptions): Promise<ContextPack> {
   }
 
   // File contents. Explicitly-owned files first, then relevance-ranked ones.
+  //
+  // On a lean pack the relevance search is skipped but the task's OWN files
+  // are still read: if the task says it owns `src/app.ts` and that file
+  // already exists, rewriting it blind would destroy whatever is in it.
   const wanted = new Set<string>(opts.task.expectedFiles ?? []);
-  for (const file of relevantFiles(codeMap, `${opts.task.title} ${opts.task.description}`, 10)) {
-    wanted.add(file.path);
+  if (rich) {
+    for (const file of relevantFiles(codeMap, `${opts.task.title} ${opts.task.description}`, 10)) {
+      wanted.add(file.path);
+    }
   }
 
   const {
     text: filesText,
     included,
     skippedTokens,
-  } = await readFilesWithin(ps.root, [...wanted], SECTION_BUDGETS.files);
+  } = await readFilesWithin(ps.root, [...wanted], budgetFor('files'));
   if (filesText) volatileParts.push(track('file contents', filesText));
 
   if (opts.task.attempts.length) {

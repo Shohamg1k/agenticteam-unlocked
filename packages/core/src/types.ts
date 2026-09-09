@@ -509,9 +509,18 @@ export interface ProjectSettings {
   devServer?: { command: string; port: number; url?: string };
   /** Skills enabled for this project, by name. */
   skills: string[];
+  /**
+   * How hard tasks in this project should try, when the per-task decision is
+   * not what the user wants. Absent means "decide per task", which is the
+   * default and the right answer for almost everyone.
+   */
+  profileOverrides?: ProfileOverrides;
   /** Max workers running in parallel for this project. */
   maxParallel: number;
 }
+
+/** Re-exported shape; defined with the profiles it belongs to. */
+import type { ProfileOverrides } from './profiles.js';
 
 export interface Checkpoint {
   id: string;
