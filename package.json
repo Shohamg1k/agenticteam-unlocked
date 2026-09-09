@@ -2,7 +2,7 @@
   "name": "agentic-team-unlocked",
   "private": true,
   "version": "0.1.0",
-  "description": "Agentic Team \u2014 a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
+  "description": "Agentic Team — a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -38,12 +38,13 @@
     "@types/node": "^22.10.5",
     "@typescript-eslint/eslint-plugin": "^8.19.1",
     "@typescript-eslint/parser": "^8.19.1",
+    "@vitest/coverage-v8": "^3.2.7",
+    "concurrently": "^9.1.2",
     "eslint": "^9.18.0",
     "eslint-config-prettier": "^9.1.0",
     "prettier": "^3.4.2",
     "typescript": "^5.7.3",
     "vite": "^6.4.3",
-    "vitest": "^3.2.7",
-    "concurrently": "^9.1.2"
+    "vitest": "^3.2.7"
   }
 }

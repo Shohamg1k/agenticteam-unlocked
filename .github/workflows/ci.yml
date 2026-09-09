@@ -32,8 +32,12 @@ jobs:
       # them), and building them here would triple install time for no signal.
       - run: npm ci --no-audit --no-fund --omit=optional
 
-      # Everything else imports @agentic/core from its build output.
+      # Workspaces import each other through their build output, so the
+      # dependencies have to exist before anything can be typechecked:
+      # server and web import @agentic/core, and desktop imports
+      # @agentic/server for its startServer entry point.
       - run: npm run build -w @agentic/core
+      - run: npm run build -w @agentic/server
 
       - run: npm run typecheck
       - run: npx eslint .
