@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import type { FileArtifact } from '@agentic/core';
-import { pagesToAudit, runVisualCheck, touchesSomethingVisual } from '../src/visual/check.js';
+import { pagesToAudit, runVisualCheck, touchesSomethingVisual, visualFeedback } from '../src/visual/check.js';
 import { getVisualRenderer } from '../src/visual/renderer.js';
 
 /**
@@ -172,6 +172,36 @@ describe('runVisualCheck', () => {
     expect(result.check.issues.filter((i) => i.severity === 'error')).toEqual([]);
     expect(result.ok).toBe(true);
   }, 90_000);
+});
+
+describe('visualFeedback', () => {
+  it('gives the agent the measurement and the mechanism, not just the symptom', async () => {
+    if (!rendererAvailable) return;
+    const result = await audit(
+      'feedback',
+      page('<div class="banner">too wide</div>', '.banner{width:1900px;height:40px;background:#eee}'),
+    );
+
+    const feedback = visualFeedback(result.check);
+
+    // The agent cannot see the page, so the brief has to carry what was seen.
+    expect(feedback).toMatch(/rendered in a real browser/i);
+    expect(feedback).toMatch(/banner/);
+    expect(feedback).toMatch(/1900px/);
+    // And what to do about it, since "it is broken" is not a repair.
+    expect(feedback).toMatch(/emit the complete files/i);
+    expect(feedback).toMatch(/wider than its container/i);
+  }, 90_000);
+
+  it('does not present a style opinion as a failure', () => {
+    const feedback = visualFeedback({
+      name: 'Visual',
+      ok: false,
+      durationMs: 1,
+      issues: [{ file: 'index.html', source: 'build', severity: 'error', message: 'measured thing' }],
+    });
+    expect(feedback).toMatch(/not a style opinion/i);
+  });
 });
 
 describe('touchesSomethingVisual', () => {
