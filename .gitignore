@@ -18,3 +18,5 @@ web/public/monaco/
 
 # Local dev state, created by running the server outside the app.
 .devdata/
+.devdata*/
+.e2e-data/

@@ -44,6 +44,34 @@ export function SettingsTab({ initialSection = 'providers' }: { initialSection?:
 
   const update = (patch: Parameters<typeof api.updateConfig>[0]) => run(() => api.updateConfig(patch));
 
+  /**
+   * Relaxing the human gate is the one setting where a stray click has real
+   * consequences: it decides whether agent output reaches your files without
+   * you seeing it. Moving to a stricter mode is always safe and applies
+   * immediately; moving to a looser one asks first.
+   */
+  const STRICTNESS: Record<ExecutionMode, number> = { approval: 0, hybrid: 1, auto: 2 };
+  const changeExecutionMode = (next: ExecutionMode) => {
+    const current = snapshot.config.executionMode;
+    if (next === current) return;
+
+    if (STRICTNESS[next] > STRICTNESS[current]) {
+      const detail =
+        next === 'auto'
+          ? 'Verified work will be applied to your project without waiting for you, including changes to sensitive files.'
+          : 'Verified work that touches nothing sensitive will be applied to your project without waiting for you.';
+      const confirmed = window.confirm(
+        `Switch the human gate from "${current}" to "${next}"?
+
+${detail}
+
+External content still always waits for an explicit acknowledgement. Every automatic acceptance is recorded in the activity log, and you can switch back at any time.`,
+      );
+      if (!confirmed) return;
+    }
+    void update({ executionMode: next });
+  };
+
   return (
     <div className="row" style={{ height: '100%', gap: 0, alignItems: 'stretch' }}>
       <nav
@@ -145,7 +173,7 @@ export function SettingsTab({ initialSection = 'providers' }: { initialSection?:
                       type="radio"
                       name="execution-mode"
                       checked={snapshot.config.executionMode === mode.id}
-                      onChange={() => void update({ executionMode: mode.id })}
+                      onChange={() => changeExecutionMode(mode.id)}
                       style={{ marginTop: 3 }}
                     />
                     <div className="col" style={{ gap: 2 }}>

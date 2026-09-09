@@ -133,6 +133,22 @@ export default [
     rules: sharedTsRules,
   },
 
+  // Node scripts with no build step: the CLI, the desktop build script, and
+  // the CommonJS shim it injects. `__filename` and `__dirname` are legitimate
+  // here — the shim exists precisely to bridge ESM and CJS.
+  {
+    files: ['**/*.mjs', '**/*.cjs'],
+    languageOptions: {
+      ecmaVersion: 2022,
+      sourceType: 'module',
+      globals: { ...nodeGlobals, __filename: 'readonly', __dirname: 'readonly' },
+    },
+    rules: {
+      'no-unused-vars': ['warn', { argsIgnorePattern: '^_', caughtErrors: 'none' }],
+      'no-empty': ['warn', { allowEmptyCatch: true }],
+    },
+  },
+
   // The preview overlay: plain browser JS, injected as a string into the
   // user's own page, so it has no build step and no module system.
   {

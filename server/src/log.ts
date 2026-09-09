@@ -61,7 +61,7 @@ export function log(
   if (activity.length > MAX_ENTRIES) activity.splice(0, activity.length - MAX_ENTRIES);
 
   const prefix = level === 'error' ? '[agentic:error]' : level === 'warn' ? '[agentic:warn]' : '[agentic]';
-   
+
   console[level === 'error' ? 'error' : level === 'warn' ? 'warn' : 'log'](`${prefix} ${entry.text}`);
 
   for (const fn of listeners) {

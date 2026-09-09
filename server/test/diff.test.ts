@@ -1,5 +1,13 @@
 import { describe, expect, it } from 'vitest';
-import { applySelectedHunks, diffLines, diffStat, fileDiff, looksBinary, splitLines, toHunks } from '../src/diff.js';
+import {
+  applySelectedHunks,
+  diffLines,
+  diffStat,
+  fileDiff,
+  looksBinary,
+  splitLines,
+  toHunks,
+} from '../src/diff.js';
 
 const lines = (s: string) => splitLines(s);
 
@@ -114,7 +122,13 @@ describe('applySelectedHunks', () => {
 
   it('accepting every hunk yields the new file exactly', () => {
     const hunks = toHunks(before, after);
-    expect(applySelectedHunks(before, after, hunks.map((h) => h.id))).toBe(after);
+    expect(
+      applySelectedHunks(
+        before,
+        after,
+        hunks.map((h) => h.id),
+      ),
+    ).toBe(after);
   });
 
   it('accepting no hunk yields the old file exactly', () => {

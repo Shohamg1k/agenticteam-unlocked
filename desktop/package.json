@@ -1,0 +1,64 @@
+{
+  "name": "@agentic/desktop",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agentic Team desktop shell",
+  "main": "dist/main.cjs",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs && cross-env AGENTIC_DEV=1 electron .",
+    "start": "electron .",
+    "package": "node build.mjs && electron-builder",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@agentic/server": "*"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "cross-env": "^7.0.3",
+    "electron": "^33.3.1",
+    "electron-builder": "^25.1.8",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.3"
+  },
+  "build": {
+    "appId": "com.agenticteam.app",
+    "productName": "Agentic Team",
+    "directories": {
+      "output": "release",
+      "buildResources": "assets"
+    },
+    "files": [
+      "dist/**/*",
+      "../web/dist/**/*",
+      "../server/dist/**/*",
+      "../server/public/**/*",
+      "../packages/core/dist/**/*"
+    ],
+    "asarUnpack": [
+      "**/node_modules/node-pty/**",
+      "**/node_modules/@napi-rs/keyring*/**"
+    ],
+    "mac": {
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "category": "public.app-category.developer-tools"
+    },
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ]
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "category": "Development"
+    }
+  }
+}

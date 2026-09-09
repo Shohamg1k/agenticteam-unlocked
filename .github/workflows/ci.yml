@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Every job writes state into the workspace, never into the runner's home,
+  # so nothing leaks between jobs and nothing needs cleaning up.
+  AGENTIC_DATA_DIR: ${{ github.workspace }}/.ci-data
+
+jobs:
+  # Fast feedback: the checks that fail most often, on one platform.
+  check:
+    name: Typecheck, lint and unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # The native modules are optional by design (the app degrades without
+      # them), and building them here would triple install time for no signal.
+      - run: npm ci --no-audit --no-fund --omit=optional
+
+      # Everything else imports @agentic/core from its build output.
+      - run: npm run build -w @agentic/core
+
+      - run: npm run typecheck
+      - run: npx eslint .
+      - run: npx prettier --check "**/*.{ts,tsx,json,css}"
+      - run: npx vitest run --coverage
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: coverage
+          path: coverage/
+          retention-days: 7
+
+  build:
+    name: Build (${{ matrix.os }})
+    needs: check
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund --omit=optional
+
+      # Proves the whole thing compiles and bundles on every target platform —
+      # the Electron main bundle in particular, which is where a Node-only API
+      # slipping into the renderer would first show up.
+      - run: npm run build
+      - run: npm run build -w @agentic/desktop
+
+      - name: Confirm the renderer bundle exists
+        shell: bash
+        run: test -f web/dist/index.html && test -f desktop/dist/main.cjs
+
+  e2e:
+    name: End-to-end smoke
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund --omit=optional
+      - run: npm run build -w @agentic/core
+
+      - run: npx playwright install chromium --with-deps
+
+      # No provider is configured here on purpose: the suite must pass on a
+      # machine with no keys and no CLI agents, which is also the state a new
+      # user is in on first launch.
+      - run: npx playwright test
+
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: playwright-report
+          path: |
+            playwright-report/
+            test-results/
+          retention-days: 7

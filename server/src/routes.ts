@@ -2,6 +2,7 @@ import express from 'express';
 import type { Request, Response, Router } from 'express';
 import type {
   ApplyDiffRequest,
+  ExecutionMode,
   CreatePlanRequest,
   FileDiff,
   ScopedEditRequest,
@@ -135,7 +136,24 @@ export function buildRouter(): Router {
         patch.executionMode === 'hybrid' ||
         patch.executionMode === 'auto'
       ) {
-        state.config.executionMode = patch.executionMode;
+        // The gate is the product's central safety property, so a change to it
+        // is audited. Relaxing it is logged as a warning: a user who finds
+        // their work auto-applying must be able to see, in the activity feed,
+        // when that stopped requiring them and never have to guess.
+        const previous = state.config.executionMode;
+        const next: ExecutionMode = patch.executionMode;
+        if (previous !== next) {
+          const strictness: Record<ExecutionMode, number> = { approval: 0, hybrid: 1, auto: 2 };
+          const relaxed = strictness[next] > strictness[previous];
+          log(
+            `Human gate changed from "${previous}" to "${next}"` +
+              (relaxed
+                ? ' — verified work will now be applied to your project with less review.'
+                : ' — more work will now wait for you.'),
+            relaxed ? 'warn' : 'info',
+          );
+        }
+        state.config.executionMode = next;
       }
       if (typeof patch.maxParallel === 'number') {
         state.config.maxParallel = Math.min(12, Math.max(1, Math.round(patch.maxParallel)));

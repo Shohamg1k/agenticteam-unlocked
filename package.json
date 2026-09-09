@@ -2,7 +2,7 @@
   "name": "agentic-team-unlocked",
   "private": true,
   "version": "0.1.0",
-  "description": "Agentic Team — a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
+  "description": "Agentic Team \u2014 a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
   "license": "MIT",
   "type": "module",
   "engines": {
@@ -17,19 +17,21 @@
   ],
   "scripts": {
     "build": "npm run build -w @agentic/core && npm run build -w @agentic/server && npm run build -w @agentic/web",
-    "dev": "node scripts/dev.mjs",
+    "dev": "npm run build -w @agentic/core && concurrently -n server,web -c blue,green \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "npm run dev -w @agentic/server",
     "dev:web": "npm run dev -w @agentic/web",
-    "dev:desktop": "npm run dev -w @agentic/desktop",
+    "dev:desktop": "npm run build && npm run build -w @agentic/desktop && npm run start -w @agentic/desktop",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
-    "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\"",
-    "format:check": "prettier --check \"**/*.{ts,tsx,json,md,css}\"",
+    "format": "prettier --write \"**/*.{ts,tsx,json,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,css}\"",
     "test": "vitest run",
     "test:watch": "vitest",
     "test:e2e": "playwright test",
-    "package": "npm run build && npm run package -w @agentic/desktop"
+    "package": "npm run build && npm run package -w @agentic/desktop",
+    "e2e": "playwright test",
+    "at": "node cli/src/index.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
@@ -41,6 +43,7 @@
     "prettier": "^3.4.2",
     "typescript": "^5.7.3",
     "vite": "^6.4.3",
-    "vitest": "^3.2.7"
+    "vitest": "^3.2.7",
+    "concurrently": "^9.1.2"
   }
 }
