@@ -1,0 +1,7 @@
+node_modules
+dist
+out
+coverage
+package-lock.json
+web/public/monaco
+*.md

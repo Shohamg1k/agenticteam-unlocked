@@ -1,0 +1,37 @@
+{
+  "name": "agentic-team-unlocked",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Agentic Team — a desktop IDE that orchestrates multiple AI coding agents in parallel across providers.",
+  "license": "MIT",
+  "type": "module",
+  "engines": { "node": ">=20.11" },
+  "workspaces": ["packages/*", "server", "web", "cli", "desktop"],
+  "scripts": {
+    "build": "npm run build -w @agentic/core && npm run build -w @agentic/server && npm run build -w @agentic/web",
+    "dev": "node scripts/dev.mjs",
+    "dev:server": "npm run dev -w @agentic/server",
+    "dev:web": "npm run dev -w @agentic/web",
+    "dev:desktop": "npm run dev -w @agentic/desktop",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,json,md,css}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,json,md,css}\"",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "package": "npm run build && npm run package -w @agentic/desktop"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/node": "^22.10.5",
+    "@typescript-eslint/eslint-plugin": "^8.19.1",
+    "@typescript-eslint/parser": "^8.19.1",
+    "eslint": "^9.18.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.3",
+    "vitest": "^2.1.8"
+  }
+}

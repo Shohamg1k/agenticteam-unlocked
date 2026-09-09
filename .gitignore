@@ -1,0 +1,17 @@
+node_modules/
+dist/
+out/
+build/
+release/
+*.tsbuildinfo
+.env
+.env.local
+.DS_Store
+Thumbs.db
+coverage/
+playwright-report/
+test-results/
+.vite/
+.agentic-team/checkpoints/
+.agentic-team/index.db*
+web/public/monaco/
