@@ -160,6 +160,40 @@ sequenceDiagram
 | Human gate      | Enforced at the route layer, not in the UI                                             | `server/routes`                            |
 | Taint           | External content never becomes instructions, and never self-accepts                    | `server/taint`                             |
 | Rollback        | Every acceptance is a git checkpoint                                                   | `server/checkpoints`                       |
+| Effort          | A task gets the model, effort and verification its complexity warrants, not the maximum | `core/profiles.profileFor`                 |
+| Expertise       | A task is matched to the specialist prompt and skills for what it is about              | `core/matching.selectAgent`                |
+| Placeholders    | A file the model described instead of writing never reaches disk                        | `server/placeholders`                      |
+
+## How hard a task tries
+
+Routing decides WHO runs a task. A profile decides how hard they try, and it is
+the difference between a simple job taking four minutes and taking twenty-five
+seconds. Measured on `make me a calculator` with Claude Code: 227s with the
+agentic tool loop, 25s without, both producing a complete working calculator.
+
+`profileFor` reads the task and returns one of three:
+
+| Profile      | When                                                     | Model | Effort | Tool loop | Context | Tier 2 |
+| ------------ | -------------------------------------------------------- | ----- | ------ | --------- | ------- | ------ |
+| **fast**     | Complexity ≤2 on a greenfield project                    | mid   | low    | no        | 12k     | no     |
+| **balanced** | Complexity ≤3, or anything that must fit existing code   | mid   | medium | yes       | 40k     | yes    |
+| **thorough** | Complexity ≥4, architecture, security, strong reasoning  | large | high   | yes       | 80k     | yes    |
+
+Two rules override complexity upward, because being fast and wrong is much
+worse than being slow. Work that must fit an existing codebase never gets a
+lean context — it has to see the code. And architecture, security review and
+anything the planner scored 4 or 5 always get the full treatment, however few
+files they touch.
+
+Turning the tool loop off is what buys most of the time. Without it the agent
+answers once with FILE: blocks and the orchestrator writes them, which is the
+reviewable path anyway; with it, the agent explores the repository, writes,
+re-reads and verifies for minutes. The syntax and secret gates always run, so
+nothing broken is waved through — only the project's own install-and-test cycle
+is skipped, and only on tasks small enough that it would cost more than the task.
+
+This makes `complexity` load-bearing rather than decorative, which is why the
+planner prompt carries an anchored rubric for it rather than adjectives.
 
 ## The two modes
 
@@ -191,11 +225,13 @@ The system degrades rather than stopping:
 ## Repository layout
 
 ```
-packages/core/     contracts, DAG, routing, artifact parsing — no I/O
+packages/core/     contracts, DAG, routing, profiles, matching, artifact parsing — no I/O
 server/            orchestrator, adapters, git, pty, preview, connectors
   src/providers/   one file per provider; nothing else imports a vendor SDK
+  src/library/     built-in specialist agents and skills, matched per task
 web/               React shell: Monaco, tabs, terminal, preview, chat
 desktop/           Electron main process, packaging
 cli/               `at` — headless access to the same server
 docs/adr/          one ADR per contested decision
+docs/DESIGN-BRIEF.md   the prompt for redesigning the frontend
 ```
