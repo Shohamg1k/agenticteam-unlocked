@@ -33,15 +33,20 @@ start.
 Nothing can run until at least one provider is connected. The two that cost
 nothing:
 
-- **Groq** — a free key from <https://console.groq.com>. Paste it into
-  Settings → Providers, or set `GROQ_API_KEY`.
 - **Ollama** — install from <https://ollama.com>, then
   `ollama pull qwen2.5-coder:7b`. Detected automatically once it is running.
 
-If you already have **Claude Code**, **Codex**, **Antigravity** or **Gemini
-CLI** installed, they are detected on your PATH with no key to paste — a
+If you already have **Claude Code**, **Codex** or the **Antigravity CLI**
+(`agy`) installed and signed in, they are detected with no key to paste — a
 subscription you already pay for is the cheapest capable capacity available, and
-the router prefers it over a metered key for exactly that reason.
+the router prefers it over a metered key for exactly that reason. `agy` is found
+at `%LOCALAPPDATA%\agy\bin\agy.exe` even though its installer does not add it to
+PATH.
+
+**Gemini CLI** is not offered. With a personal Google account it fails with
+`IneligibleTierError` — Google no longer supports that client for individuals —
+and, because it exits 0 while doing so, it would otherwise look like a
+successful empty answer.
 
 Providers are re-probed every 30 seconds, so installing a CLI or pasting a key
 lights it up without a restart.

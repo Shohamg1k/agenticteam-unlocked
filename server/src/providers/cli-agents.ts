@@ -44,10 +44,19 @@ export interface CliAgentConfig {
   name: string;
   /** Executable to look for on PATH. */
   bin: string;
+  /**
+   * Known install locations, tried before PATH.
+   *
+   * Antigravity's installer puts `agy.exe` in %LOCALAPPDATA%/agy/bin and adds
+   * nothing to PATH until `agy install` is run — and an app launched before
+   * that never sees the change anyway. Installed and signed in should not read
+   * as missing because of where an installer chose to put a file.
+   */
+  binCandidates?: string[];
   /** Arguments for a one-shot, non-interactive completion. */
   args: string[];
   /** How the prompt reaches the process. */
-  promptVia: 'stdin' | 'argv';
+  promptVia: 'stdin' | 'argv' | 'print-flag';
   /** Appended only when permissions are set to `yolo`. */
   skipPermissionsFlag?: string;
   /** Args that make the binary print its version, for the probe. */
@@ -212,25 +221,56 @@ export const CLI_AGENTS: CliAgentConfig[] = [
   {
     id: 'antigravity',
     name: 'Google Antigravity',
-    bin: 'antigravity',
+    bin: 'agy',
+    binCandidates: ['%LOCALAPPDATA%/agy/bin/agy.exe', '%HOME%/.local/bin/agy'],
     args: [],
-    promptVia: 'stdin',
+    promptVia: 'print-flag',
+    skipPermissionsFlag: '--dangerously-skip-permissions',
     versionArgs: ['--version'],
-    capabilities: ['code', 'long-context', 'frontend'],
+    capabilities: ['code', 'strong-reasoning', 'long-context', 'frontend', 'tool-use'],
     contextWindow: 1_000_000,
-    throughputTps: 40,
+    throughputTps: 45,
     timeoutMs: 20 * 60_000,
-    installHint: 'Install Google Antigravity and make sure `antigravity` is on your PATH',
-    // Checked against 2.12.2: the product installs an Electron application and
-    // a language server, and no command-line entry point of any kind.
-    // `Antigravity.exe --version` opens the IDE and does not exit.
-    guiInstallPaths: [
-      '%LOCALAPPDATA%/Programs/antigravity/Antigravity.exe',
-      '%LOCALAPPDATA%/Programs/Antigravity/Antigravity.exe',
-      '%PROGRAMFILES%/Antigravity/Antigravity.exe',
-      '/Applications/Antigravity.app',
-      '%HOME%/.local/share/antigravity/antigravity',
+    installHint: 'Install the Antigravity CLI (agy), then run `agy` once to sign in',
+    // Verified against agy 1.2.0 with `agy --help` and `agy models`, and run
+    // end to end: `--model` takes the ids `agy models` lists, `--effort` is
+    // low|medium|high, and `--print-timeout` defaults to 5m — which would kill
+    // a task the orchestrator is still prepared to wait twenty minutes for.
+    models: [
+      {
+        id: 'antigravity/flash-low',
+        label: 'Gemini 3.8 Flash (Low) — fastest',
+        alias: 'gemini-3.8-flash-low',
+        tier: 'small',
+        capabilities: ['code', 'cheap-ok', 'long-context'],
+        throughputTps: 70,
+      },
+      {
+        id: 'antigravity/flash',
+        label: 'Gemini 3.8 Flash — balanced',
+        alias: 'gemini-3.8-flash-medium',
+        tier: 'mid',
+        capabilities: ['code', 'frontend', 'long-context', 'tool-use'],
+        throughputTps: 45,
+      },
+      {
+        id: 'antigravity/pro',
+        label: 'Gemini 3.1 Pro (High) — most capable',
+        alias: 'gemini-3.1-pro-high',
+        tier: 'large',
+        capabilities: ['code', 'strong-reasoning', 'long-context', 'frontend', 'tool-use'],
+        throughputTps: 30,
+      },
     ],
+    tuning: {
+      model: {
+        flag: '--model',
+        tiers: { small: 'gemini-3.8-flash-low', mid: 'gemini-3.8-flash-medium', large: 'gemini-3.1-pro-high' },
+      },
+      // No effort flag: agy encodes effort in the model id and refuses a mismatch
+      // (measured: "--model gemini-3.8-flash-medium conflicts with --effort=low").
+      oneShot: ['--print-timeout', '20m'],
+    },
   },
   {
     id: 'gemini-cli',
@@ -295,12 +335,15 @@ export class CliAgentAdapter extends BaseAdapter {
   readonly transport = 'cli' as const;
 
   private readonly config: CliAgentConfig;
+  /** What actually gets spawned: a known install path when one exists. */
+  private readonly bin: string;
   private permissions: AgentPermissions = 'yolo';
   private installedVersion?: string;
 
   constructor(config: CliAgentConfig) {
     super();
     this.config = config;
+    this.bin = resolveConfiguredBin(config);
     this.id = config.id;
     this.name = config.name;
     // A CLI that names its models gets one entry each, so a user can ask for
@@ -384,7 +427,7 @@ export class CliAgentAdapter extends BaseAdapter {
 
   async probe(): Promise<ProviderProbeResult> {
     try {
-      const { stdout, code } = await runOnce(this.config.bin, this.config.versionArgs, { timeoutMs: 8_000 });
+      const { stdout, code } = await runOnce(this.bin, this.config.versionArgs, { timeoutMs: 8_000 });
       if (code === null) {
         // `runOnce` reports a timeout as a null exit code. On Windows this is
         // usually the shell resolving a name that does not exist and hanging.
@@ -396,7 +439,7 @@ export class CliAgentAdapter extends BaseAdapter {
         // On Windows a missing command goes through the shell and comes back as
         // exit code 1 rather than ENOENT, so "not on PATH" and "ran and failed"
         // are told apart by asking where the binary is, not by the exit code.
-        const resolved = resolveBin(this.config.bin);
+        const resolved = resolveBin(this.bin);
         return this.unavailableBecause(
           resolved.kind === 'unresolved'
             ? `Not installed. ${this.config.installHint}`
@@ -517,6 +560,7 @@ export class CliAgentAdapter extends BaseAdapter {
       args.push(this.config.skipPermissionsFlag);
     }
     if (this.config.promptVia === 'argv') args.push(prompt);
+    if (this.config.promptVia === 'print-flag') args.push(...printFlagArgs(prompt));
 
     if (request.profile) {
       const tuned = this.tuningArgs(request.profile, request.model);
@@ -541,7 +585,7 @@ export class CliAgentAdapter extends BaseAdapter {
       };
     }
 
-    const child = spawnCli(this.config.bin, args, {
+    const child = spawnCli(this.bin, args, {
       cwd: request.cwd ?? process.cwd(),
       env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
     });
@@ -664,6 +708,23 @@ export class CliAgentAdapter extends BaseAdapter {
       return;
     }
 
+    // Measured on Gemini CLI 0.59 with a personal Google account: the run exits
+    // 0 and prints "IneligibleTierError: This client is no longer supported for
+    // Gemini Code Assist for individuals". Exit code alone would have called
+    // that a successful, empty answer.
+    if (/IneligibleTierError|no longer supported for Gemini Code Assist/i.test(`${stdout} ${stderr}`)) {
+      yield {
+        type: 'error',
+        runId: request.runId,
+        error: {
+          kind: 'auth',
+          message: `${this.name}: Google no longer supports this client for individual accounts. Use Antigravity instead.`,
+        },
+        at: Date.now(),
+      };
+      return;
+    }
+
     // A zero exit with a quota complaint on stderr happens: some CLIs report a
     // usage limit as a normal message. Classify on content, not just on code.
     if (looksLikeQuotaError(stderr) && !stdout.trim()) {
@@ -764,6 +825,53 @@ function expandPath(template: string): string | undefined {
 
 type ResolvedBin = { path: string; kind: 'exe' | 'shim' | 'unresolved' };
 
+/** The binary to run, preferring a known install location over PATH. */
+function resolveConfiguredBin(config: CliAgentConfig): string {
+  for (const candidate of config.binCandidates ?? []) {
+    const expanded = expandPath(candidate);
+    if (expanded && fs.existsSync(expanded)) return expanded;
+  }
+  return config.bin;
+}
+
+/**
+ * Deliver a prompt as the value of `--print`, the only form `agy` accepts.
+ *
+ * Measured on agy 1.2.0: the argument after a bare `--print` is taken as the
+ * prompt (so a following flag becomes the prompt), an empty `--print=` is
+ * refused, and stdin is not read — `--print=-` is answered as the literal
+ * prompt "-". A context pack can exceed Windows' 32,767-character command
+ * line, so a long prompt goes to a file the agent is told to read: it has file
+ * tools, and `--add-dir` puts the file inside what it may open.
+ */
+const PRINT_FLAG_MAX_CHARS = 24_000;
+
+function printFlagArgs(prompt: string): string[] {
+  if (prompt.length <= PRINT_FLAG_MAX_CHARS) return [`--print=${prompt}`];
+
+  const dir = path.join(os.tmpdir(), 'agentic-prompts');
+  fs.mkdirSync(dir, { recursive: true });
+  // Tidied on the next write rather than after this run: deleting a file the
+  // agent may still be reading would break the task it belongs to.
+  const hourAgo = Date.now() - 60 * 60_000;
+  for (const name of fs.readdirSync(dir)) {
+    const full = path.join(dir, name);
+    try {
+      if (fs.statSync(full).mtimeMs < hourAgo) fs.rmSync(full, { force: true });
+    } catch {
+      // Already gone; nothing to do.
+    }
+  }
+
+  const file = path.join(dir, `prompt-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}.md`);
+  fs.writeFileSync(file, prompt, 'utf8');
+  return [
+    '--add-dir',
+    dir,
+    `--print=Your complete instructions for this task are in the file ${file}. Read the whole file first, then do exactly what it says and reply in the format it asks for.`,
+  ];
+}
+
 const binCache = new Map<string, ResolvedBin>();
 
 /**
@@ -777,6 +885,17 @@ const binCache = new Map<string, ResolvedBin>();
 export function resolveBin(bin: string): ResolvedBin {
   const cached = binCache.get(bin);
   if (cached) return cached;
+
+  // An absolute path that exists needs no lookup — and `where` cannot take one.
+  if (path.isAbsolute(bin) && fs.existsSync(bin)) {
+    const lower = bin.toLowerCase();
+    const direct: ResolvedBin = {
+      path: bin,
+      kind: lower.endsWith('.cmd') || lower.endsWith('.bat') ? 'shim' : 'exe',
+    };
+    binCache.set(bin, direct);
+    return direct;
+  }
 
   // Unresolved until something says otherwise. The old default was 'shim',
   // which meant `unresolved` was declared in the type and never produced — so

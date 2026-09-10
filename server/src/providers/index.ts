@@ -76,7 +76,10 @@ function register(adapter: ProviderAdapter): void {
  * and policy, not from registration order.
  */
 /** Catalogue providers that are not offered, by id. */
-const EXCLUDED_PROVIDERS = new Set(['groq']);
+// gemini-cli: Google retired its personal-account sign-in ("IneligibleTierError
+// ... please migrate to the Antigravity suite"), so every task sent to it fails.
+// Antigravity's own CLI is the supported path and is registered instead.
+const EXCLUDED_PROVIDERS = new Set(['groq', 'gemini-cli']);
 
 export function buildRegistry(): void {
   registry.clear();
@@ -92,7 +95,9 @@ export function buildRegistry(): void {
   }
   register(new AnthropicAdapter());
   register(new GoogleAdapter());
-  for (const config of CLI_AGENTS) register(new CliAgentAdapter(config));
+  for (const config of CLI_AGENTS.filter((c) => !EXCLUDED_PROVIDERS.has(c.id))) {
+    register(new CliAgentAdapter(config));
+  }
 
   // The generic endpoint only exists once the user has configured a base URL.
   const custom = process.env.OPENAI_COMPATIBLE_BASE_URL;

@@ -162,9 +162,11 @@ External content still always waits for an explicit acknowledgement. Every autom
                     className="muted"
                     style={{ margin: '4px 0 0', fontSize: 'var(--text-sm)', lineHeight: 1.6 }}
                   >
-                    Claude Code, Codex, Antigravity and Gemini CLI are detected on your PATH — there is no key
-                    to paste. They are checked every 30 seconds, so installing one lights it up without
-                    restarting the app. A subscription you already pay for is treated as free by the router,
+                    Claude Code, Codex and Antigravity (<span className="mono">agy</span>) are detected
+                    automatically — on your PATH, or where their installer put them — with no key to paste.
+                    They are checked every 30 seconds, so installing one lights it up without restarting the
+                    app. Gemini CLI is not offered: Google no longer supports it for personal accounts and
+                    points to Antigravity instead. A subscription you already pay for is treated as free by the router,
                     which is why it is preferred over a metered key.
                   </p>
                 </div>

@@ -56,12 +56,11 @@ vendor exists, so adding one is a single file.
 | Tier | Providers |
 |---|---|
 | 0 · Local | Ollama |
-| 1 · Free tier | Groq |
-| 2 · Subscription | Claude Code, Codex CLI, Antigravity, Gemini CLI |
+| 2 · Subscription | Claude Code, Codex CLI, Google Antigravity (`agy`) |
 | 3 · Your API key | Anthropic, OpenAI, Google, OpenRouter, any OpenAI-compatible endpoint |
 
 The ladder is the failover order. Capacity you have already paid for — a local
-model, a free tier, a subscription seat — is spent before money is.
+model or a subscription seat — is spent before money is.
 
 ## Getting started
 
@@ -79,10 +78,14 @@ Then open <http://localhost:5273>, or run it as the desktop app:
 npm run dev:desktop
 ```
 
-Nothing runs until a model is connected. The two free options are a **Groq**
-key (<https://console.groq.com>) or **Ollama** running locally. If you already
-have Claude Code, Codex, Antigravity or Gemini CLI installed, they are detected
-on your PATH with nothing to paste.
+Nothing runs until a model is connected. **Ollama** running locally costs
+nothing. If you already have Claude Code, Codex or the Antigravity CLI (`agy`)
+installed and signed in, they are detected automatically with nothing to paste —
+including `agy`, which its installer does not put on PATH. With two of them
+connected, independent tasks run on different agents at the same time.
+
+Gemini CLI is not offered: Google no longer supports it for personal accounts
+and directs those users to Antigravity.
 
 Full instructions, environment variables and troubleshooting:
 [docs/BUILDING.md](docs/BUILDING.md).
