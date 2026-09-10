@@ -1,4 +1,5 @@
 import type { AgentProfile, Capability, TeamRole } from '@agentic/core';
+import { DOMAIN_AGENTS } from './agents-domains.js';
 
 /**
  * The built-in specialist library.
@@ -428,7 +429,7 @@ the barrier it creates, and the fix.`,
   ),
 ];
 
-export const BUILTIN_AGENTS: AgentProfile[] = [...CORE, ...LANGUAGES, ...INFRA];
+export const BUILTIN_AGENTS: AgentProfile[] = [...CORE, ...LANGUAGES, ...INFRA, ...DOMAIN_AGENTS];
 
 /**
  * The profile to use when nothing matched, by capability.

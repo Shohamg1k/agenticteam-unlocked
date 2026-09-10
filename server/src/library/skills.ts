@@ -1,4 +1,5 @@
 import type { SkillDef } from '@agentic/core';
+import { DOMAIN_SKILLS } from './skills-domains.js';
 
 /**
  * The built-in skill library.
@@ -608,4 +609,5 @@ export const BUILTIN_SKILLS: SkillDef[] = [
   ...BACKEND,
   ...QUALITY,
   ...PRACTICE,
+  ...DOMAIN_SKILLS,
 ];

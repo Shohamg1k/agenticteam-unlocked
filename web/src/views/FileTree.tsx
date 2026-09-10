@@ -152,6 +152,39 @@ export function FileTree() {
   const [entries, setEntries] = useState<TreeEntry[]>([]);
   const [loading, setLoading] = useState(false);
 
+  /**
+   * The project switcher, folded away by default.
+   *
+   * It was an always-open list of every folder ever opened, above the file
+   * tree and with no height of its own — so after a couple of weeks of use it
+   * filled the sidebar and left the tree about seventy pixels to live in. The
+   * files are what the panel is for; switching project is something you do
+   * once a session.
+   *
+   * Collapsed is remembered per machine, because a preference you have to set
+   * again every launch is not a preference. Storage can throw in a private
+   * window, hence the guard.
+   */
+  const [showOthers, setShowOthers] = useState(() => {
+    try {
+      return localStorage.getItem('agentic.sidebar.otherProjects') === 'open';
+    } catch {
+      return false;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('agentic.sidebar.otherProjects', showOthers ? 'open' : 'closed');
+    } catch {
+      // Nothing to do: the panel still works, it just forgets.
+    }
+  }, [showOthers]);
+
+  const others = activeProject
+    ? snapshot.projects.filter((p) => p.id !== activeProject.id)
+    : [];
+
   const reload = useCallback(async () => {
     if (!activeProject) {
       setEntries([]);
@@ -227,15 +260,23 @@ export function FileTree() {
         )}
       </div>
 
-      {snapshot.projects.length > 1 && (
+      {others.length > 0 && (
         <div className="section" style={{ borderTop: '1px solid var(--border)', borderBottom: 'none' }}>
-          <div className="section__header" style={{ cursor: 'default' }}>
-            Other projects
-          </div>
-          <div className="list">
-            {snapshot.projects
-              .filter((p) => p.id !== activeProject.id)
-              .map((project) => (
+          <button
+            type="button"
+            className="section__header row"
+            style={{ width: '100%', gap: 6, background: 'none', border: 'none' }}
+            aria-expanded={showOthers}
+            onClick={() => setShowOthers((open) => !open)}
+          >
+            {showOthers ? <IconChevronDown size={12} /> : <IconChevronRight size={12} />}
+            <span className="grow" style={{ textAlign: 'left' }}>Other projects</span>
+            <span className="subtle">{others.length}</span>
+          </button>
+
+          {showOthers && (
+            <div className="list" style={{ maxHeight: '35vh', overflowY: 'auto' }}>
+              {others.map((project) => (
                 <button
                   key={project.id}
                   type="button"
@@ -247,7 +288,8 @@ export function FileTree() {
                   <span className="truncate">{project.name}</span>
                 </button>
               ))}
-          </div>
+            </div>
+          )}
         </div>
       )}
     </>
