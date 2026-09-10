@@ -1,7 +1,8 @@
+import fs from 'node:fs';
 import path from 'node:path';
 import type { FileArtifact, VerificationCheck, VerificationIssue } from '@agentic/core';
 import { startStaticServer } from '../staticserver.js';
-import { findHtmlFiles } from '../previewdetect.js';
+import { findHtmlFiles, looksLikeBundlerShell } from '../previewdetect.js';
 import { profileProject } from '../projects.js';
 import { auditUrl } from './renderer.js';
 import type { PageAudit } from './renderer.js';
@@ -137,6 +138,33 @@ export async function runVisualCheck(opts: VisualCheckOptions): Promise<VisualCh
     return skipped('Not run: this project has no HTML page to render.');
   }
 
+  /**
+   * A bundler shell is not a page.
+   *
+   * A React or Vue entry file is an empty root and a module script pointing at
+   * an unbuilt source path. Serving it as a plain file renders nothing, and
+   * every check then reports a blank page — which is how a correct MERN
+   * scaffold was failed twice, at thirteen minutes an attempt, for a defect
+   * that was entirely in the checking.
+   *
+   * The dev-server guard above catches most of these, but not a project whose
+   * dev script lives in `client/package.json` and whose root therefore looks
+   * like it has none. This catches it by looking at the page itself.
+   */
+  const shells = pages.filter((page) => {
+    const produced = opts.files.find((f) => f.path.split(path.sep).join('/') === page);
+    const html = produced?.content ?? readIfExists(path.join(opts.root, page));
+    return html ? looksLikeBundlerShell(html) : false;
+  });
+
+  const renderable = pages.filter((page) => !shells.includes(page));
+  if (!renderable.length) {
+    return skipped(
+      'Not run: the page is a shell for a bundler, so it renders nothing as a plain file. ' +
+        'Start the preview and use Check layout to audit the built app.',
+    );
+  }
+
   // The overlay is the whole point: the task's files are served as they would
   // be, and the working tree is not touched.
   const overrides = new Map(opts.files.map((f) => [f.path, f.content]));
@@ -160,7 +188,7 @@ export async function runVisualCheck(opts: VisualCheckOptions): Promise<VisualCh
   let unavailable: string | undefined;
 
   try {
-    for (const page of pages) {
+    for (const page of renderable) {
       for (const viewport of VIEWPORTS) {
         if (Date.now() - started > budgetMs) {
           log('Visual check ran out of time; reporting what it has', 'warn', {
@@ -249,6 +277,15 @@ function issuesFrom(audit: PageAudit, page: string, viewport: string): Verificat
   }
 
   return issues;
+}
+
+/** Read a file if it is there. Used to look at a page we did not produce. */
+function readIfExists(file: string): string | undefined {
+  try {
+    return fs.readFileSync(file, 'utf8');
+  } catch {
+    return undefined;
+  }
 }
 
 function unique(values: string[]): string[] {

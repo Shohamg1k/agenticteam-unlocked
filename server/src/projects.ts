@@ -277,6 +277,15 @@ export function profileProject(root: string): ProjectProfile {
       );
       if (entry) {
         profile.devServer = { command: `node ${entry}`, port: guessDevPort(profile.frameworks) };
+      } else {
+        // Still nothing, so look one level down. A MERN app frequently keeps
+        // its dev script in `client/package.json` and leaves the root as a
+        // holder for `concurrently` — or has no root manifest worth running at
+        // all. Reading only the root made the whole project look like a folder
+        // of static files, which is how a React shell ended up being served as
+        // a plain page and failing its own verification.
+        const sub = findSubProjectDevServer(root);
+        if (sub) profile.devServer = sub;
       }
     }
   } else if (
@@ -341,6 +350,41 @@ export function profileProject(root: string): ProjectProfile {
   if (settings?.devServer) profile.devServer = settings.devServer;
 
   return profile;
+}
+
+/**
+ * A dev server in a conventional sub-project.
+ *
+ * Runs it from the sub-project's own directory, because that is where its
+ * package.json and its node_modules are. The client is preferred over the
+ * server: it is the half a person wants to look at, and landing on the API
+ * would show a JSON endpoint and read as a broken preview.
+ */
+function findSubProjectDevServer(root: string): { command: string; port: number } | undefined {
+  for (const name of ['client', 'frontend', 'web', 'ui', 'app', 'server', 'api', 'backend']) {
+    const dir = path.join(root, name);
+    const manifest = path.join(dir, 'package.json');
+    if (!fs.existsSync(manifest)) continue;
+
+    try {
+      const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8')) as { scripts?: Record<string, string> };
+      const script = ['dev', 'start', 'serve'].find((s) => pkg.scripts?.[s]);
+      if (!script) continue;
+
+      const frameworks: string[] = [];
+      const source = readTextFile(manifest);
+      if (/"vite"/.test(source)) frameworks.push('Vite');
+      if (/"next"/.test(source)) frameworks.push('Next.js');
+
+      return {
+        command: `npm --prefix ${name} run ${script}`,
+        port: guessDevPort(frameworks),
+      };
+    } catch {
+      // An unreadable manifest is not a dev server.
+    }
+  }
+  return undefined;
 }
 
 /** Read a small source file, or nothing. Used only to tell frameworks apart. */

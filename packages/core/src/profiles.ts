@@ -110,13 +110,17 @@ export const THOROUGH_PROFILE: ExecutionProfile = {
 /**
  * Which profile a task gets.
  *
- * Complexity is the main signal, but two things override it upward, because
- * both are cases where being fast and wrong is much worse than being slow:
+ * Two independent decisions, and keeping them separate is the whole point:
  *
- *  - Work that must fit an existing codebase needs to see that codebase. A
- *    task editing files that already exist cannot be given a lean context.
- *  - Architecture, security and anything the planner called hard gets the full
- *    treatment regardless of how few files it touches.
+ *  - **How hard to think** — model tier and reasoning effort — comes from
+ *    complexity, role and capability. It costs money and a little time.
+ *  - **Whether to look around** — the tool loop — comes from whether there is
+ *    anything to look at. It costs minutes.
+ *
+ * Conflating them is what made a greenfield scaffold take 777 seconds: the task
+ * genuinely needed judgement, judgement meant the thorough profile, and the
+ * thorough profile brought an agentic loop that spent thirteen minutes
+ * exploring an empty directory.
  */
 export function profileFor(
   task: Pick<Task, 'complexity' | 'capability' | 'expectedFiles' | 'role'>,
@@ -124,21 +128,64 @@ export function profileFor(
 ): ExecutionProfile {
   const capability: Capability = task.capability;
 
-  // Never fast-path work whose whole job is judgement.
-  if (capability === 'strong-reasoning' || task.role === 'architect' || task.role === 'security-reviewer') {
-    return THOROUGH_PROFILE;
+  // How hard to think. Judgement work thinks harder, and hard work thinks
+  // harder still; this is the axis that costs money and a little time.
+  const base =
+    task.complexity >= 4 ||
+    task.role === 'architect' ||
+    task.role === 'security-reviewer' ||
+    capability === 'strong-reasoning'
+      ? THOROUGH_PROFILE
+      : task.complexity <= 2
+        ? FAST_PROFILE
+        : BALANCED_PROFILE;
+
+  /**
+   * Whether the agent gets a tool loop, decided separately — and this is the
+   * axis that costs MINUTES.
+   *
+   * What a tool loop buys is the ability to read: to find the file, see how the
+   * surrounding code is written, and check its own work against what is there.
+   * In an empty project there is nothing to read. The loop then spends its time
+   * exploring a directory it is about to create, and the cost is not small: a
+   * greenfield MERN scaffold took 777 seconds on the thorough profile, doing
+   * work a single reply does in well under a minute.
+   *
+   * So thinking hard and looking around are no longer the same decision. A
+   * task can be given the strongest model and the highest effort and still
+   * answer in one pass, which is exactly what scaffolding an empty project
+   * wants, and what "never fast-path judgement work" was trying to protect
+   * without meaning to buy the loop as well.
+   *
+   * The project's own checks go with it: a project with no files has no test
+   * suite to run.
+   */
+  if (!opts.projectHasFiles) {
+    return {
+      ...base,
+      tools: false,
+      richContext: false,
+      projectChecks: false,
+      // Enough room to emit a whole scaffold in one reply, which is the thing
+      // this configuration is for.
+      maxOutputTokens: Math.max(base.maxOutputTokens, 24_000),
+      maxContextTokens: Math.min(base.maxContextTokens, 20_000),
+    };
   }
-  if (task.complexity >= 4) return THOROUGH_PROFILE;
 
-  // Editing an existing codebase means reading it first.
-  const touchesExistingProject = opts.projectHasFiles;
-  if (task.complexity <= 2 && !touchesExistingProject) return FAST_PROFILE;
+  /**
+   * Existing code, so the loop earns itself — and the floor is balanced.
+   *
+   * A one-line change to a real codebase looks trivial by complexity and is
+   * not: it still has to find the file and match what is around it. Handing it
+   * the fast profile would take away both the tools and the context it needs
+   * to do that, which is the mistake this branch exists to prevent.
+   */
+  if (base === FAST_PROFILE) {
+    return { ...BALANCED_PROFILE, effort: 'low' };
+  }
 
-  // A small, well-scoped change to an existing project: lean context is wrong,
-  // but a full agentic loop and the whole test suite are still overkill.
-  if (task.complexity <= 2) return { ...BALANCED_PROFILE, name: 'balanced', effort: 'low' };
-
-  return BALANCED_PROFILE;
+  return base;
 }
 
 /**

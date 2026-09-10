@@ -29,13 +29,17 @@ const task = (over: Partial<Parameters<typeof profileFor>[0]> = {}) => ({
 
 describe('profileFor', () => {
   it('puts a simple greenfield task on the fast path', () => {
-    expect(profileFor(task({ complexity: 2 }), { projectHasFiles: false })).toEqual(FAST_PROFILE);
+    expect(profileFor(task({ complexity: 2 }), { projectHasFiles: false })).toMatchObject({
+      name: 'fast',
+      tools: false,
+      projectChecks: false,
+    });
   });
 
   it('does not give a lean context to work that must fit an existing codebase', () => {
     const chosen = profileFor(task({ complexity: 2 }), { projectHasFiles: true });
     expect(chosen.richContext).toBe(true);
-    expect(chosen.name).toBe('balanced');
+    expect(chosen.tools).toBe(true);
   });
 
   it('keeps the effort low for a small change to an existing project', () => {
@@ -44,33 +48,71 @@ describe('profileFor', () => {
     expect(profileFor(task({ complexity: 2 }), { projectHasFiles: true }).effort).toBe('low');
   });
 
-  it('sends genuinely hard work to the thorough profile', () => {
-    expect(profileFor(task({ complexity: 5 }), { projectHasFiles: false })).toEqual(THOROUGH_PROFILE);
+  it('sends genuinely hard work to the strongest model', () => {
     expect(profileFor(task({ complexity: 4 }), { projectHasFiles: true })).toEqual(THOROUGH_PROFILE);
+    expect(profileFor(task({ complexity: 5 }), { projectHasFiles: false })).toMatchObject({
+      tier: 'large',
+      effort: 'high',
+    });
   });
 
-  it('never fast-paths work whose whole job is judgement', () => {
-    // Complexity 1 and greenfield would otherwise be the fastest possible path.
+  /**
+   * The 777-second scaffold.
+   *
+   * Thinking hard and looking around used to be one decision, so a task that
+   * needed judgement got an agentic loop as well — and spent thirteen minutes
+   * exploring a directory it was about to create. They are separate now: this
+   * task gets the strongest model AND answers in one pass.
+   */
+  it('thinks hard about greenfield work without going exploring', () => {
+    const scaffold = profileFor(
+      task({ complexity: 3, capability: 'strong-reasoning' }),
+      { projectHasFiles: false },
+    );
+
+    expect(scaffold.tier).toBe('large');
+    expect(scaffold.effort).toBe('high');
+    // There is nothing to read in an empty project, so nothing to read WITH.
+    expect(scaffold.tools).toBe(false);
+    expect(scaffold.projectChecks).toBe(false);
+    // And room to emit a whole scaffold in that one pass.
+    expect(scaffold.maxOutputTokens).toBeGreaterThanOrEqual(24_000);
+  });
+
+  it('still never fast-paths work whose whole job is judgement', () => {
+    // The protection that mattered survives: these think as hard as anything
+    // does, they simply do not go exploring an empty directory to do it.
     const reasoning = profileFor(
       task({ complexity: 1, capability: 'strong-reasoning' }),
       { projectHasFiles: false },
     );
-    expect(reasoning).toEqual(THOROUGH_PROFILE);
+    expect(reasoning.tier).toBe('large');
+    expect(reasoning.effort).toBe('high');
 
     for (const role of ['architect', 'security-reviewer'] as TeamRole[]) {
-      expect(profileFor(task({ complexity: 1, role }), { projectHasFiles: false })).toEqual(
-        THOROUGH_PROFILE,
-      );
+      const chosen = profileFor(task({ complexity: 1, role }), { projectHasFiles: false });
+      expect(chosen.tier).toBe('large');
     }
   });
 
-  it('uses the balanced profile for integrative work', () => {
+  it('gives judgement work the loop once there is code to read', () => {
+    const chosen = profileFor(
+      task({ complexity: 3, capability: 'strong-reasoning' }),
+      { projectHasFiles: true },
+    );
+    expect(chosen).toEqual(THOROUGH_PROFILE);
+    expect(chosen.tools).toBe(true);
+  });
+
+  it('uses the balanced profile for integrative work in an existing project', () => {
     expect(profileFor(task({ complexity: 3 }), { projectHasFiles: true })).toEqual(BALANCED_PROFILE);
   });
 });
 
 describe('the profiles themselves', () => {
-  it('only turns the tool loop off on the fast profile', () => {
+  it('describes how hard to try, before the tool loop is decided separately', () => {
+    // These are the starting points. `profileFor` strips the loop from any of
+    // them when the project is empty, so a task can be thorough AND one-shot.
     expect(FAST_PROFILE.tools).toBe(false);
     expect(BALANCED_PROFILE.tools).toBe(true);
     expect(THOROUGH_PROFILE.tools).toBe(true);

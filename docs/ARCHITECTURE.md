@@ -242,26 +242,36 @@ the difference between a simple job taking four minutes and taking twenty-five
 seconds. Measured on `make me a calculator` with Claude Code: 227s with the
 agentic tool loop, 25s without, both producing a complete working calculator.
 
-`profileFor` reads the task and returns one of three:
+`profileFor` makes **two independent decisions**, and keeping them separate is
+the whole point.
 
-| Profile      | When                                                     | Model | Effort | Tool loop | Context | Tier 2 |
-| ------------ | -------------------------------------------------------- | ----- | ------ | --------- | ------- | ------ |
-| **fast**     | Complexity ≤2 on a greenfield project                    | mid   | low    | no        | 12k     | no     |
-| **balanced** | Complexity ≤3, or anything that must fit existing code   | mid   | medium | yes       | 40k     | yes    |
-| **thorough** | Complexity ≥4, architecture, security, strong reasoning  | large | high   | yes       | 80k     | yes    |
+**How hard to think** — model tier and reasoning effort — comes from complexity,
+role and capability:
 
-Two rules override complexity upward, because being fast and wrong is much
-worse than being slow. Work that must fit an existing codebase never gets a
-lean context — it has to see the code. And architecture, security review and
-anything the planner scored 4 or 5 always get the full treatment, however few
-files they touch.
+| Level        | When                                                             | Model | Effort |
+| ------------ | ---------------------------------------------------------------- | ----- | ------ |
+| **fast**     | Complexity ≤2                                                    | mid   | low    |
+| **balanced** | Complexity 3, or any change to existing code                     | mid   | medium |
+| **thorough** | Complexity ≥4, architecture, security review, strong reasoning   | large | high   |
 
-Turning the tool loop off is what buys most of the time. Without it the agent
-answers once with FILE: blocks and the orchestrator writes them, which is the
-reviewable path anyway; with it, the agent explores the repository, writes,
-re-reads and verifies for minutes. The syntax and secret gates always run, so
-nothing broken is waved through — only the project's own install-and-test cycle
-is skipped, and only on tasks small enough that it would cost more than the task.
+**Whether to look around** — the tool loop — comes from whether there is
+anything to look at. It is off when the project is empty, at every level.
+
+That separation was learned the hard way. Conflating them meant a task that
+needed judgement got an agentic loop as well, and a greenfield MERN scaffold
+spent **777 seconds** — thirteen minutes — exploring a directory it was about to
+create. A tool loop buys the ability to READ: to find the file, see how the
+surrounding code is written, and check its own work. In an empty project there
+is nothing to read, however hard the task is. So a scaffold now gets the
+strongest model at the highest effort AND answers in one pass.
+
+The floor works the other way too: a one-line change to a real codebase looks
+trivial by complexity and is not, so anything touching existing code gets the
+loop and the context whatever its score.
+
+The syntax, secret and placeholder gates always run, so nothing broken is waved
+through — only the project's own install-and-test cycle is skipped, and only
+where there is no project to test yet.
 
 This makes `complexity` load-bearing rather than decorative, which is why the
 planner prompt carries an anchored rubric for it rather than adjectives.

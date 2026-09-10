@@ -174,6 +174,44 @@ describe('runVisualCheck', () => {
   }, 90_000);
 });
 
+describe('what it refuses to look at', () => {
+  it('does not render a React shell as a plain file', async () => {
+    // A Vite entry is an empty root and a module script pointing at an unbuilt
+    // source path. Served as a file it renders nothing, and every check then
+    // reports a blank page — which failed a correct MERN scaffold twice, at
+    // thirteen minutes an attempt, for a defect entirely in the checking.
+    const root = path.join(dir, 'react-shell');
+    fs.mkdirSync(root, { recursive: true });
+    const result = await runVisualCheck({
+      projectId: 'test',
+      root,
+      files: [
+        {
+          path: 'index.html',
+          content:
+            '<!doctype html><html><head><title>App</title></head><body>' +
+            '<div id="root"></div><script type="module" src="/src/main.jsx"></script>' +
+            '</body></html>',
+          language: 'html',
+        },
+      ],
+    });
+
+    expect(result.check.skipped).toMatch(/shell for a bundler/i);
+    // Skipped, never failed: there is nothing wrong with the page.
+    expect(result.check.issues).toEqual([]);
+  });
+
+  it('still renders a real page that happens to have a root div', async () => {
+    if (!rendererAvailable) return;
+    const result = await audit(
+      'real-root',
+      page('<div id="root"><h1>Actually rendered on the server</h1><p>Real content here.</p></div>'),
+    );
+    expect(result.check.skipped).toBeUndefined();
+  }, 90_000);
+});
+
 describe('visualFeedback', () => {
   it('gives the agent the measurement and the mechanism, not just the symptom', async () => {
     if (!rendererAvailable) return;

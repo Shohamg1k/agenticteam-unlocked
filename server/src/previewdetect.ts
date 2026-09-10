@@ -97,6 +97,40 @@ export function shouldServeStatically(opts: { hasDevServer: boolean; htmlFiles: 
 }
 
 /**
+ * Is this HTML a shell for a bundler, rather than a page?
+ *
+ * A Vite or CRA `index.html` is a stub: an empty `<div id="root">` and a module
+ * script pointing at a SOURCE file — `/src/main.jsx` — that only exists as
+ * JavaScript after a build. Served as a plain file it renders nothing, and
+ * every check that then looks at it reports a blank page.
+ *
+ * That is not hypothetical. A freshly scaffolded MERN app kept its dev script
+ * in `client/package.json`, so the root looked like it had no dev server, so
+ * the project looked static, so the visual check rendered the React shell and
+ * failed a correct task on it — twice, at thirteen minutes an attempt.
+ *
+ * The tell is specific and worth keeping specific: a module script whose source
+ * is an unbuilt path. A real page's scripts point at files that exist.
+ */
+export function looksLikeBundlerShell(html: string): boolean {
+  const moduleScripts = [...html.matchAll(/<script[^>]*type=["']module["'][^>]*src=["']([^"']+)["']/gi)].map(
+    (m) => m[1] ?? '',
+  );
+  if (moduleScripts.some((src) => /^[./]*(src|app)\//i.test(src) || /\.(jsx|tsx|ts)$/i.test(src))) {
+    return true;
+  }
+
+  // The other unmistakable one: a framework's own placeholder root with no
+  // content of its own anywhere in the body.
+  const hasEmptyRoot = /<div[^>]+id=["'](root|app|__next)["'][^>]*>\s*<\/div>/i.test(html);
+  const bodyText = html
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, ' ')
+    .trim();
+  return hasEmptyRoot && bodyText.length < 40;
+}
+
+/**
  * The URL a dev server printed about itself.
  *
  * Every dev server worth previewing announces where it is listening, because
