@@ -1,4 +1,7 @@
 import { spawn, spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import type { ChildProcessWithoutNullStreams } from 'node:child_process';
 import type {
   AgentRunError,
@@ -59,6 +62,15 @@ export interface CliAgentConfig {
   timeoutMs: number;
   /** Where to get it, shown when it is not installed. */
   installHint: string;
+  /**
+   * Places the product lives when it is installed but has no CLI.
+   *
+   * "Not installed" and "installed, but there is nothing here to drive" are
+   * completely different problems with completely different fixes, and telling
+   * someone to install what they already have is the least useful message a
+   * provider panel can show. Where we can tell the two apart, we should.
+   */
+  guiInstallPaths?: string[];
   /**
    * How this CLI exposes speed/quality controls, when it exposes any.
    *
@@ -141,6 +153,16 @@ export const CLI_AGENTS: CliAgentConfig[] = [
     throughputTps: 40,
     timeoutMs: 20 * 60_000,
     installHint: 'Install Google Antigravity and make sure `antigravity` is on your PATH',
+    // Checked against 2.12.2: the product installs an Electron application and
+    // a language server, and no command-line entry point of any kind.
+    // `Antigravity.exe --version` opens the IDE and does not exit.
+    guiInstallPaths: [
+      '%LOCALAPPDATA%/Programs/antigravity/Antigravity.exe',
+      '%LOCALAPPDATA%/Programs/Antigravity/Antigravity.exe',
+      '%PROGRAMFILES%/Antigravity/Antigravity.exe',
+      '/Applications/Antigravity.app',
+      '%HOME%/.local/share/antigravity/antigravity',
+    ],
   },
   {
     id: 'gemini-cli',
@@ -198,33 +220,62 @@ export class CliAgentAdapter extends BaseAdapter {
     this.permissions = mode;
   }
 
+  /**
+   * The reason this agent is unavailable, as precisely as we can put it.
+   *
+   * "Install it" is the wrong advice for someone who has installed it. The
+   * case that prompted this: Antigravity 2.12.2 installs a full IDE and no
+   * command-line entry point, so the product is present, correct and
+   * completely undrivable from here — and the panel was telling its owner to
+   * go and install it.
+   */
+  private unavailableBecause(reason: string): ProviderProbeResult {
+    const installedAt = (this.config.guiInstallPaths ?? [])
+      .map(expandPath)
+      .find((candidate) => candidate && fs.existsSync(candidate));
+
+    if (installedAt) {
+      return {
+        available: false,
+        detail:
+          `${this.config.name} is installed at ${installedAt}, but it does not ship a ` +
+          `command-line interface, so tasks cannot be sent to it from here. It is a desktop ` +
+          `application rather than a headless agent. Nothing to fix — this provider stays off ` +
+          `until it offers a CLI.`,
+      };
+    }
+
+    return { available: false, detail: reason };
+  }
+
   async probe(): Promise<ProviderProbeResult> {
     try {
       const { stdout, code } = await runOnce(this.config.bin, this.config.versionArgs, { timeoutMs: 8_000 });
       if (code === null) {
         // `runOnce` reports a timeout as a null exit code. On Windows this is
         // usually the shell resolving a name that does not exist and hanging.
-        return {
-          available: false,
-          detail: `\`${this.config.bin} --version\` did not respond within 8s. ${this.config.installHint}`,
-        };
+        return this.unavailableBecause(
+          `\`${this.config.bin} --version\` did not respond within 8s. ${this.config.installHint}`,
+        );
       }
       if (code !== 0) {
-        return {
-          available: false,
-          detail: `\`${this.config.bin}\` exited with code ${code}. ${this.config.installHint}`,
-        };
+        // On Windows a missing command goes through the shell and comes back as
+        // exit code 1 rather than ENOENT, so "not on PATH" and "ran and failed"
+        // are told apart by asking where the binary is, not by the exit code.
+        const resolved = resolveBin(this.config.bin);
+        return this.unavailableBecause(
+          resolved.kind === 'unresolved'
+            ? `Not installed. ${this.config.installHint}`
+            : `\`${this.config.bin}\` exited with code ${code}. ${this.config.installHint}`,
+        );
       }
       this.installedVersion = stdout.trim().split('\n')[0]?.slice(0, 60);
       return { available: true, detail: this.installedVersion ?? 'installed' };
     } catch (err) {
       const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
-      return {
-        available: false,
-        detail: missing
-          ? `Not installed. ${this.config.installHint}`
-          : `Could not run it: ${errorMessage(err)}`,
-      };
+      return this.unavailableBecause(
+        missing ? `Not installed. ${this.config.installHint}` : `Could not run it: ${errorMessage(err)}`,
+      );
     }
   }
 
@@ -515,7 +566,10 @@ export function spawnCli(
   opts: { cwd?: string; env?: NodeJS.ProcessEnv },
 ): ChildProcessWithoutNullStreams {
   const resolved = resolveBin(bin);
-  const needsShell = resolved.kind === 'shim';
+  // A path we could not resolve still goes through the shell: it is the only
+  // thing that might find it, and a clear "not found" from the shell beats a
+  // spawn error from us.
+  const needsShell = resolved.kind === 'shim' || resolved.kind === 'unresolved';
 
   return spawn(resolved.path, needsShell ? args.map(quoteForCmd) : args, {
     cwd: opts.cwd,
@@ -537,6 +591,18 @@ function quoteForCmd(arg: string): string {
   return `"${arg.replace(/(\\*)"/g, '$1$1\\"').replace(/(\\+)$/, '$1$1')}"`;
 }
 
+/** Expand the handful of placeholders `guiInstallPaths` uses. */
+function expandPath(template: string): string | undefined {
+  const value = template
+    .replace('%LOCALAPPDATA%', process.env.LOCALAPPDATA ?? '')
+    .replace('%PROGRAMFILES%', process.env.PROGRAMFILES ?? '')
+    .replace('%HOME%', os.homedir());
+  // An unset variable leaves a path rooted at nothing, which would then match
+  // something unrelated. Better to skip the candidate.
+  if (value.startsWith('/') && template.startsWith('%')) return undefined;
+  return path.normalize(value);
+}
+
 type ResolvedBin = { path: string; kind: 'exe' | 'shim' | 'unresolved' };
 
 const binCache = new Map<string, ResolvedBin>();
@@ -553,7 +619,12 @@ export function resolveBin(bin: string): ResolvedBin {
   const cached = binCache.get(bin);
   if (cached) return cached;
 
-  let result: ResolvedBin = { path: bin, kind: process.platform === 'win32' ? 'shim' : 'exe' };
+  // Unresolved until something says otherwise. The old default was 'shim',
+  // which meant `unresolved` was declared in the type and never produced — so
+  // "not on PATH" was indistinguishable from "ran and failed", and every
+  // uninstalled agent reported the shell's exit code 1 instead of saying it was
+  // not installed.
+  let result: ResolvedBin = { path: bin, kind: 'unresolved' };
   try {
     const finder = process.platform === 'win32' ? 'where' : 'which';
     const out = spawnSync(finder, [bin], { encoding: 'utf8', windowsHide: true });
