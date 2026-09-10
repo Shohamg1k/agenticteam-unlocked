@@ -44,6 +44,15 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 interface PreviewProcess {
   projectId: string;
   child?: ChildProcess;
+  /**
+   * The halves of the app that are not the one you look at.
+   *
+   * A MERN project with no root script has a client and a server and nothing
+   * tying them together. Starting only the client gives a UI whose every
+   * request fails, which reads as the app being broken rather than as half of
+   * it not having been started.
+   */
+  support?: ChildProcess[];
   proxy?: http.Server;
   /** Static mode only: the file server standing in for a dev server. */
   static?: StaticServer;
@@ -221,7 +230,7 @@ async function startStaticPreview(
 async function startDevServerPreview(
   projectId: string,
   root: string,
-  devServer: { command: string; port: number },
+  devServer: { command: string; port: number; support?: string[] },
 ): Promise<PreviewState> {
   const { command, port: guessedPort } = devServer;
 
@@ -282,12 +291,15 @@ async function startDevServerPreview(
   preview.state.statusDetail = `Starting ${command}…`;
   changed();
 
-  const child = spawn(command, {
-    cwd: root,
-    shell: true,
-    windowsHide: true,
-    env: { ...process.env, FORCE_COLOR: '0', BROWSER: 'none' },
-  });
+  const spawnDevCommand = (cmd: string) =>
+    spawn(cmd, {
+      cwd: root,
+      shell: true,
+      windowsHide: true,
+      env: { ...process.env, FORCE_COLOR: '0', BROWSER: 'none' },
+    });
+
+  const child = spawnDevCommand(command);
   preview.child = child;
 
   const capture = (chunk: Buffer) => {
@@ -302,6 +314,22 @@ async function startDevServerPreview(
   };
   child.stdout?.on('data', capture);
   child.stderr?.on('data', capture);
+
+  // Start the other halves alongside. Their output is captured too — a failure
+  // in the API is what a user needs to see when the UI says nothing works —
+  // but the URL to open comes from the primary.
+  preview.support = (devServer.support ?? []).map((cmd) => {
+    log(`Also starting: ${cmd}`, 'info', { projectId });
+    const extra = spawnDevCommand(cmd);
+    extra.stdout?.on('data', capture);
+    extra.stderr?.on('data', capture);
+    extra.on('error', (err) => {
+      preview.output.push(`
+${cmd} could not start: ${describeError(err)}
+`);
+    });
+    return extra;
+  });
 
   child.on('error', (err) => {
     preview.state.status = 'failed';
@@ -420,6 +448,18 @@ export async function stopPreview(projectId: string): Promise<void> {
 
   preview.proxy?.close();
   preview.static?.close();
+
+  // Every half, not just the one being watched. A leftover API server holds its
+  // port and the next start proxies to a stale process.
+  for (const extra of preview.support ?? []) {
+    if (extra.killed || !extra.pid) continue;
+    if (process.platform === 'win32') {
+      spawn('taskkill', ['/pid', String(extra.pid), '/T', '/F'], { windowsHide: true });
+    } else {
+      extra.kill('SIGTERM');
+    }
+  }
+
   if (preview.child && !preview.child.killed) {
     // A dev server usually spawns children (a bundler, a watcher). SIGTERM on
     // the shell reaches them on POSIX; on Windows the tree needs killing.

@@ -71,6 +71,28 @@ describe('finding a dev server', () => {
     );
   });
 
+  it('finds a MERN app that has no root package.json at all', () => {
+    // A completely ordinary layout: just `client/` and `server/`, each
+    // self-contained. Every other branch of detection asks about the root, so
+    // this one found no ecosystem, no dev server and a `client/index.html`,
+    // concluded it was a folder of static files, and served a React shell as a
+    // plain page. Measured end to end, that is what "the preview doesn't work"
+    // looks like on a real MERN build.
+    withProject(
+      {
+        'README.md': '# app',
+        'client/package.json': json({ scripts: { dev: 'vite' }, dependencies: { vite: '^5.0.0' } }),
+        'client/index.html': '<div id="root"></div>',
+        'server/package.json': json({ scripts: { dev: 'nodemon src/index.js' } }),
+      },
+      (root) => {
+        const profile = profileProject(root);
+        expect(profile.devServer?.command).toBe('npm --prefix client run dev');
+        expect(profile.ecosystem).toBe('node');
+      },
+    );
+  });
+
   it('prefers the root script over a sub-project one', () => {
     withProject(
       {

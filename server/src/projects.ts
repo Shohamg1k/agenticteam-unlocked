@@ -193,8 +193,16 @@ export interface ProjectProfile {
   scripts: Record<string, string>;
   /** Commands tier 2 should run, resolved from settings or detection. */
   checks: { typecheck?: string; lint?: string; test?: string; build?: string };
-  /** Dev server command and port, for the preview tab. */
-  devServer?: { command: string; port: number };
+  /**
+   * How to run this project for the preview.
+   *
+   * `support` is for the halves of an app that are not the one you look at. A
+   * MERN project with no root script has a `client` and a `server` and no
+   * `concurrently` to tie them together — starting only the client gives you a
+   * UI whose every request fails, which is a worse kind of broken than no
+   * preview at all, because it looks like the app is at fault.
+   */
+  devServer?: { command: string; port: number; support?: string[] };
   frameworks: string[];
 }
 
@@ -345,6 +353,26 @@ export function profileProject(root: string): ProjectProfile {
     }
   }
 
+  /**
+   * Last resort: a project that is only its sub-projects.
+   *
+   * A MERN app with no root package.json is a completely ordinary layout —
+   * just `client/` and `server/`, each self-contained — and every branch above
+   * asks about the root. So this one found no ecosystem, no dev server, and a
+   * `client/index.html`, concluded it was a folder of static files, and served
+   * a React shell as a plain page.
+   *
+   * The check that catches it has to run outside the chain, because the whole
+   * chain is conditioned on a root manifest that is not there.
+   */
+  if (!profile.devServer) {
+    const sub = findSubProjectDevServer(root);
+    if (sub) {
+      profile.devServer = sub;
+      if (profile.ecosystem === 'unknown') profile.ecosystem = 'node';
+    }
+  }
+
   // Explicit settings always win over detection.
   if (settings?.checks) profile.checks = { ...profile.checks, ...settings.checks };
   if (settings?.devServer) profile.devServer = settings.devServer;
@@ -360,7 +388,11 @@ export function profileProject(root: string): ProjectProfile {
  * server: it is the half a person wants to look at, and landing on the API
  * would show a JSON endpoint and read as a broken preview.
  */
-function findSubProjectDevServer(root: string): { command: string; port: number } | undefined {
+function findSubProjectDevServer(
+  root: string,
+): { command: string; port: number; support?: string[] } | undefined {
+  const found: { name: string; command: string; port: number }[] = [];
+
   for (const name of ['client', 'frontend', 'web', 'ui', 'app', 'server', 'api', 'backend']) {
     const dir = path.join(root, name);
     const manifest = path.join(dir, 'package.json');
@@ -376,15 +408,29 @@ function findSubProjectDevServer(root: string): { command: string; port: number 
       if (/"vite"/.test(source)) frameworks.push('Vite');
       if (/"next"/.test(source)) frameworks.push('Next.js');
 
-      return {
+      found.push({
+        name,
+        // `--prefix` so it runs in the sub-project, where its package.json and
+        // its node_modules are.
         command: `npm --prefix ${name} run ${script}`,
         port: guessDevPort(frameworks),
-      };
+      });
     } catch {
       // An unreadable manifest is not a dev server.
     }
   }
-  return undefined;
+
+  if (!found.length) return undefined;
+
+  // The first match is the one to look at — the list is ordered front end
+  // first, because landing on the API shows a JSON endpoint and reads as a
+  // broken preview. Everything else starts alongside it, unwatched.
+  const [primary, ...support] = found;
+  return {
+    command: primary!.command,
+    port: primary!.port,
+    support: support.length ? support.map((s) => s.command) : undefined,
+  };
 }
 
 /** Read a small source file, or nothing. Used only to tell frameworks apart. */
