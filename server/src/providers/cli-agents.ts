@@ -72,6 +72,35 @@ export interface CliAgentConfig {
    */
   guiInstallPaths?: string[];
   /**
+   * The models this CLI can actually be told to use.
+   *
+   * Every CLI provider used to advertise exactly one synthetic model named
+   * after itself, which made "Claude Code" a single opaque choice. It is not
+   * one choice: Haiku, Sonnet and Opus differ by more than an order of
+   * magnitude in both cost and capability, and a user who wants Opus for the
+   * hard task and Haiku for the boilerplate was being told the provider had
+   * nothing to choose between.
+   *
+   * `alias` is what goes after the tuning `model` flag, and it is the field
+   * that must match the binary exactly — an unrecognised value makes these
+   * CLIs exit non-zero, so every alias here has been run against a real
+   * install rather than guessed.
+   */
+  models?: CliModel[];
+  /**
+   * How to tell "installed" from "signed in", when they differ.
+   *
+   * `--version` answers a question nobody was asking. Gemini CLI 0.59 prints
+   * its version happily with no credentials at all, and then every task fails
+   * with "Please set an Auth method" — several minutes into a run, having
+   * looked available the whole time. A provider that reports itself ready and
+   * then refuses every request is worse than one that says it is not ready.
+   *
+   * `files` are paths that exist once the CLI has been signed in; `env` are
+   * variables that authenticate it instead. Either satisfies the check.
+   */
+  authCheck?: { files?: string[]; env?: string[]; hint: string };
+  /**
    * How this CLI exposes speed/quality controls, when it exposes any.
    *
    * Only filled in for agents whose flags have actually been run against the
@@ -82,6 +111,19 @@ export interface CliAgentConfig {
    * existed. Fill one in after checking `--help` on a real install.
    */
   tuning?: CliTuning;
+}
+
+export interface CliModel {
+  /** Stable id, namespaced by provider so two CLIs can both offer "sonnet". */
+  id: string;
+  label: string;
+  /** Exact value passed after the tuning model flag. */
+  alias: string;
+  /** Which profile tier picks this model when the user has not chosen one. */
+  tier: ExecutionProfile['tier'];
+  capabilities?: ModelDescriptor['capabilities'];
+  contextWindow?: number;
+  throughputTps?: number;
 }
 
 export interface CliTuning {
@@ -117,6 +159,32 @@ export const CLI_AGENTS: CliAgentConfig[] = [
     throughputTps: 40,
     timeoutMs: 20 * 60_000,
     installHint: 'Install with: npm i -g @anthropic-ai/claude-code, then run `claude` once to sign in',
+    models: [
+      {
+        id: 'claude-code/haiku',
+        label: 'Haiku 4.5 — fastest',
+        alias: 'haiku',
+        tier: 'small',
+        capabilities: ['code', 'cheap-ok', 'tool-use'],
+        throughputTps: 90,
+      },
+      {
+        id: 'claude-code/sonnet',
+        label: 'Sonnet 5 — balanced',
+        alias: 'sonnet',
+        tier: 'mid',
+        capabilities: ['code', 'strong-reasoning', 'frontend', 'long-context', 'tool-use'],
+        throughputTps: 55,
+      },
+      {
+        id: 'claude-code/opus',
+        label: 'Opus 5 — most capable',
+        alias: 'opus',
+        tier: 'large',
+        capabilities: ['code', 'strong-reasoning', 'frontend', 'long-context', 'tool-use'],
+        throughputTps: 30,
+      },
+    ],
     // Verified against the installed binary's --help. Note the deliberate
     // absence of `--bare`: it forces ANTHROPIC_API_KEY-only auth, which would
     // break the subscription sign-in that makes this provider free.
@@ -172,11 +240,49 @@ export const CLI_AGENTS: CliAgentConfig[] = [
     promptVia: 'argv',
     skipPermissionsFlag: '--yolo',
     versionArgs: ['--version'],
-    capabilities: ['code', 'long-context', 'cheap-ok'],
+    capabilities: ['code', 'long-context', 'cheap-ok', 'frontend', 'tool-use'],
     contextWindow: 1_000_000,
     throughputTps: 50,
     timeoutMs: 15 * 60_000,
     installHint: 'Install with: npm i -g @google/gemini-cli, then run `gemini` once to sign in',
+    authCheck: {
+      files: ['%HOME%/.gemini/oauth_creds.json', '%HOME%/.gemini/google_accounts.json'],
+      env: ['GEMINI_API_KEY', 'GOOGLE_API_KEY', 'GOOGLE_GENAI_USE_VERTEXAI', 'GOOGLE_GENAI_USE_GCA'],
+      hint: 'Installed, but not signed in. Run `gemini` once in a terminal and complete the browser sign-in, or set GEMINI_API_KEY.',
+    },
+    models: [
+      {
+        id: 'gemini-cli/flash',
+        label: 'Gemini 2.5 Flash — fastest',
+        alias: 'gemini-2.5-flash',
+        tier: 'small',
+        capabilities: ['code', 'cheap-ok', 'long-context'],
+        throughputTps: 110,
+      },
+      {
+        id: 'gemini-cli/pro',
+        label: 'Gemini 2.5 Pro — most capable',
+        alias: 'gemini-2.5-pro',
+        tier: 'large',
+        capabilities: ['code', 'strong-reasoning', 'long-context', 'frontend', 'tool-use'],
+        throughputTps: 45,
+      },
+    ],
+    tuning: {
+      model: {
+        flag: '--model',
+        // Only two real rungs, so `mid` maps to Flash: the fast profile carries
+        // tier `mid`, and pointing it at Pro would make the profile whose entire
+        // purpose is speed pick the slow model.
+        tiers: { small: 'gemini-2.5-flash', mid: 'gemini-2.5-flash', large: 'gemini-2.5-pro' },
+      },
+      // Measured on 0.59.0: without `--skip-trust`, running in a folder the
+      // CLI has not seen before prints "Approval mode overridden to default
+      // because the current folder is not trusted" and silently downgrades
+      // `--yolo`. The run then blocks on an approval prompt that nothing is
+      // there to answer, and the task times out looking like a hang.
+      oneShot: ['--skip-trust'],
+    },
   },
 ];
 
@@ -197,23 +303,51 @@ export class CliAgentAdapter extends BaseAdapter {
     this.config = config;
     this.id = config.id;
     this.name = config.name;
-    this.defaultModel = config.id;
-    this.models = [
-      {
-        id: config.id,
-        label: config.name,
-        capabilities: config.capabilities,
-        contextWindow: config.contextWindow,
-        maxOutputTokens: 64_000,
-        // A subscription is not billed per token. Zero is correct, and it is
-        // what makes the router spend a seat before spending money.
-        pricing: { inputPerMTok: 0, outputPerMTok: 0 },
-        throughputTps: config.throughputTps,
-        supportsStreaming: true,
-        supportsTools: true,
-        supportsVision: false,
-      },
-    ];
+    // A CLI that names its models gets one entry each, so a user can ask for
+    // Opus rather than for "Claude Code" and hope. One that does not keeps the
+    // old single synthetic model, which is still the honest description of a
+    // binary with no model flag.
+    const declared = config.models ?? [];
+    this.models = declared.length
+      ? declared.map((m) => ({
+          id: m.id,
+          label: m.label,
+          capabilities: m.capabilities ?? config.capabilities,
+          contextWindow: m.contextWindow ?? config.contextWindow,
+          maxOutputTokens: 64_000,
+          // A subscription is not billed per token. Zero is correct, and it is
+          // what makes the router spend a seat before spending money.
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: m.throughputTps ?? config.throughputTps,
+          tier: m.tier,
+          supportsStreaming: true,
+          supportsTools: true,
+          supportsVision: false,
+        }))
+      : [
+          {
+            id: config.id,
+            label: config.name,
+            capabilities: config.capabilities,
+            contextWindow: config.contextWindow,
+            maxOutputTokens: 64_000,
+            pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+            throughputTps: config.throughputTps,
+            supportsStreaming: true,
+            supportsTools: true,
+            supportsVision: false,
+          },
+        ];
+
+    // The mid-tier model is the sane default: the router still moves work up
+    // and down from there per task, and a provider whose default was its most
+    // expensive model would make "just run it" an expensive instruction.
+    this.defaultModel = declared.find((m) => m.tier === 'mid')?.id ?? declared[0]?.id ?? config.id;
+  }
+
+  /** The config entry behind a model id, if this CLI names its models. */
+  private modelFor(id: string | undefined): CliModel | undefined {
+    return this.config.models?.find((m) => m.id === id);
   }
 
   setPermissions(mode: AgentPermissions): void {
@@ -270,6 +404,19 @@ export class CliAgentAdapter extends BaseAdapter {
         );
       }
       this.installedVersion = stdout.trim().split('\n')[0]?.slice(0, 60);
+      const auth = this.config.authCheck;
+      if (auth) {
+        const signedIn =
+          (auth.files ?? []).some((f) => {
+            const resolved = expandPath(f);
+            return typeof resolved === 'string' && fs.existsSync(resolved);
+          }) || (auth.env ?? []).some((name) => Boolean(process.env[name]));
+
+        if (!signedIn) {
+          return { available: false, detail: `${this.installedVersion ?? 'installed'} — ${auth.hint}` };
+        }
+      }
+
       return { available: true, detail: this.installedVersion ?? 'installed' };
     } catch (err) {
       const missing = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
@@ -329,14 +476,20 @@ export class CliAgentAdapter extends BaseAdapter {
    * anything. The flags ARE the feature here, and a silent typo in one would
    * cost minutes per task while still looking like it worked.
    */
-  tuningArgs(profile: ExecutionProfile | undefined): string[] {
+  tuningArgs(profile: ExecutionProfile | undefined, modelId?: string): string[] {
     const t = this.config.tuning;
     if (!t) return [];
 
     const args: string[] = [...(t.oneShot ?? [])];
-    if (!profile) return args;
 
-    if (t.model) args.push(t.model.flag, t.model.tiers[profile.tier]);
+    // A model the caller named beats the profile's tier, and beats it even
+    // with no profile at all. This is the whole point of letting someone pick
+    // Opus: the router's opinion about what this task deserves is exactly what
+    // they are overriding.
+    const chosen = this.modelFor(modelId);
+    if (t.model && chosen) args.push(t.model.flag, chosen.alias);
+    if (!profile) return args;
+    if (t.model && !chosen) args.push(t.model.flag, t.model.tiers[profile.tier]);
 
     const effort = t.effort?.values[profile.effort];
     if (t.effort && effort) args.push(t.effort.flag, effort);
@@ -349,18 +502,24 @@ export class CliAgentAdapter extends BaseAdapter {
   }
 
   private async *run(request: CompletionRequest, signal: AbortSignal): AsyncIterable<AgentRunEvent> {
-    yield { type: 'start', runId: request.runId, providerId: this.id, model: this.id, at: Date.now() };
+    yield {
+      type: 'start',
+      runId: request.runId,
+      providerId: this.id,
+      model: this.modelFor(request.model)?.id ?? this.id,
+      at: Date.now(),
+    };
     this.countRequest();
 
     const prompt = [request.system, ...request.messages.map((m) => m.content)].join('\n\n');
-    const args = [...this.config.args, ...this.tuningArgs(request.profile)];
+    const args = [...this.config.args, ...this.tuningArgs(request.profile, request.model)];
     if (this.permissions === 'yolo' && this.config.skipPermissionsFlag) {
       args.push(this.config.skipPermissionsFlag);
     }
     if (this.config.promptVia === 'argv') args.push(prompt);
 
     if (request.profile) {
-      const tuned = this.tuningArgs(request.profile);
+      const tuned = this.tuningArgs(request.profile, request.model);
       yield {
         type: 'log',
         runId: request.runId,
@@ -628,8 +787,22 @@ export function resolveBin(bin: string): ResolvedBin {
   try {
     const finder = process.platform === 'win32' ? 'where' : 'which';
     const out = spawnSync(finder, [bin], { encoding: 'utf8', windowsHide: true });
-    const first = out.stdout
-      ?.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)[0];
+    const found = out.stdout?.split(/\r?\n/).map((l) => l.trim()).filter(Boolean) ?? [];
+
+    /**
+     * On Windows, take the first RUNNABLE match rather than the first match.
+     *
+     * npm installs a global CLI three times over: `gemini` (a shell script for
+     * Git Bash), `gemini.cmd` and `gemini.ps1`. `where` lists the extensionless
+     * one first, and Windows cannot execute it — so the probe spawned a bash
+     * script through cmd.exe, got a non-zero exit, and reported a CLI that was
+     * installed and working as "Not installed. Install with: npm i -g ...".
+     */
+    const first =
+      process.platform === 'win32'
+        ? (found.find((f) => /\.(cmd|bat|exe)$/i.test(f)) ?? found[0])
+        : found[0];
+
     if (first) {
       // `.cmd` and `.bat` are batch files: only cmd.exe can run them. Anything
       // else is a real executable and can be spawned directly.

@@ -285,6 +285,34 @@ export interface RouteContext {
    * neutral (0.5) rather than 0 — an unused provider is unknown, not bad.
    */
   reliability?: Record<string, number>;
+  /**
+   * How many tasks each provider is running right now.
+   *
+   * Routing scored every task as if the ladder were idle, so with two agents
+   * connected the strongest one won every task and the second sat unused —
+   * a product whose whole claim is a team of models behaving like one model
+   * with a queue.
+   *
+   * This is not a fairness hack bolted onto the scoring; it is the latency
+   * axis being told the truth. A provider already working on something is
+   * genuinely slower to start the next thing, and a CLI agent is slower still
+   * because a second process competes for the same subscription seat. Feed
+   * that in and the tasks spread themselves, without any rule saying they must.
+   *
+   * The penalty is deliberately small. A provider that is the only one able to
+   * do the work still wins while busy; one that is merely a bit better loses
+   * to an idle peer, which is the right call for wall-clock.
+   */
+  busyProviders?: Record<string, number>;
+  /**
+   * How much model this task deserves, from its execution profile.
+   *
+   * Without it the ladder cannot tell Sonnet from Opus — they advertise the
+   * same capabilities, so the tie fell to throughput and the bigger model was
+   * unreachable no matter how hard the task was. The profile already made this
+   * decision per task; this is the wire it travels on.
+   */
+  preferTier?: 'small' | 'mid' | 'large';
   now?: number;
 }
 
@@ -346,6 +374,15 @@ function capabilityScore(model: ModelDescriptor, need: Capability): number {
   return fallbacks[need].some((c) => model.capabilities.includes(c)) ? 0.45 : 0;
 }
 
+/**
+ * Score charged per task a provider is already running.
+ *
+ * Sized against the axis weights rather than picked: capability is worth 3 and
+ * is the axis that must keep winning, so this sits below a genuine capability
+ * gap and above the noise between two providers that are both fine.
+ */
+const BUSY_PENALTY = 1.5;
+
 export function scoreCandidates(
   adapters: ProviderAdapter[],
   policy: RoutingPolicy,
@@ -400,6 +437,23 @@ export function scoreCandidates(
       // is out of quota should still lose to an available one.
       const preferIdx = preferOrder.indexOf(adapter.id);
       if (preferIdx >= 0) score += (preferOrder.length - preferIdx) * 0.5;
+      // Charged before the pins, so a pinned provider is never displaced by
+      // it: the user's choice is not a scheduling suggestion.
+      // Only the top rung needs help, and only in one direction.
+      //
+      // Sonnet and Opus advertise identical capabilities and both cost nothing
+      // on a subscription, so every tie between them fell to throughput and
+      // Opus was unreachable however hard the task was. Small and mid models
+      // need no adjustment: a cheap model winning cheap work is the ladder
+      // working, and boosting an exact tier match broke exactly that by
+      // sending a rename to the mid model.
+      if (ctx.preferTier && model.tier === 'large') {
+        score += ctx.preferTier === 'large' ? 3 : -1;
+      }
+
+      const inFlight = ctx.busyProviders?.[adapter.id] ?? 0;
+      if (inFlight > 0) score -= Math.min(inFlight, 3) * BUSY_PENALTY;
+
       if (ctx.task.pinnedProviderId === adapter.id) score += 1000;
       else if (ctx.task.plannedProviderId === adapter.id) score += 3;
       // A model the user named is a bigger boost than one a policy rule

@@ -181,7 +181,12 @@ export const api = {
   cancelTask: (id: string) => post(`/tasks/${id}/cancel`),
   updateTask: (
     id: string,
-    patchBody: Partial<Pick<Task, 'pinnedProviderId' | 'complexity' | 'title' | 'description'>>,
+    patchBody: Partial<
+      Pick<
+        Task,
+        'pinnedProviderId' | 'pinnedModelId' | 'pinnedEffort' | 'complexity' | 'title' | 'description'
+      >
+    >,
   ) => patch<Task>(`/tasks/${id}`, patchBody),
   taskDiff: (id: string) => get<TaskDiff>(`/tasks/${id}/diff`),
   applyTask: (id: string, body: Omit<ApplyDiffRequest, 'taskId'> = {}) =>

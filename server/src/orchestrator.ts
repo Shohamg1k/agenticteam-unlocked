@@ -521,6 +521,29 @@ async function startWorker(run: RunState, task: Task): Promise<void> {
   }
 }
 
+/**
+ * What each provider is working on right now, excluding this task.
+ *
+ * Feeding this to the router is what turns "several tasks at once" into
+ * "several AGENTS at once". Without it the strongest connected provider won
+ * every parallel task and the rest of the ladder sat idle, which looks
+ * identical to having one model with a queue — and a team of models behaving
+ * like one model with a queue is not the product.
+ */
+function inFlightByProvider(run: RunState, exceptTaskId: string): Record<string, number> {
+  const ps = projectState(run.projectId);
+  const busy: Record<string, number> = {};
+  if (!ps) return busy;
+
+  for (const task of tasksOfPlan(ps, run.plan.id)) {
+    if (task.id === exceptTaskId) continue;
+    if (task.status !== 'running' && task.status !== 'verifying') continue;
+    if (!task.providerId) continue;
+    busy[task.providerId] = (busy[task.providerId] ?? 0) + 1;
+  }
+  return busy;
+}
+
 async function executeTask(run: RunState, task: Task, signal: AbortSignal): Promise<void> {
   const ps = projectState(run.projectId);
   if (!ps) return;
@@ -564,14 +587,20 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
    * has to fit an existing codebase needs to see it, so a brownfield task never
    * gets the lean-context treatment however simple it looks.
    */
-  const profile = applyOverrides(
+  const chosen = applyOverrides(
     profileFor(task, { projectHasFiles: (run.codeMap?.totalFiles ?? 0) > 0 }),
     getProject(run.projectId)?.settings.profileOverrides,
   );
+
+  // An effort the user set on THIS task outranks everything above, including
+  // the project-wide override — it is the most specific statement anybody has
+  // made about how hard this particular piece of work is.
+  const profile = task.pinnedEffort ? { ...chosen, effort: task.pinnedEffort } : chosen;
   worklog(
     task,
     'orchestrator',
     `Running this on the "${profile.name}" profile` +
+      (task.pinnedEffort ? ` at ${task.pinnedEffort} effort, which you chose` : '') +
       (profile.tools ? '' : ' — one shot, no tool loop') +
       (profile.projectChecks ? '' : '; project checks are skipped for a task this small'),
   );
@@ -615,6 +644,8 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
       contextTokens: pack.totalTokens,
       mode: run.plan.mode,
       exclude: [...triedProviders],
+      busyProviders: inFlightByProvider(run, task.id),
+      preferTier: profile.tier,
     });
 
     if (!decision.chosen) {
@@ -631,6 +662,8 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
               task,
               contextTokens: pack.totalTokens,
               mode: run.plan.mode,
+              busyProviders: inFlightByProvider(run, task.id),
+              preferTier: profile.tier,
             })
           : undefined;
 

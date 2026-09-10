@@ -462,3 +462,146 @@ describe('normalizePolicy', () => {
     expect(validatePolicy(p)).toEqual([]);
   });
 });
+
+/**
+ * Two agents, at once, on different work.
+ *
+ * The judges' question — "are two different agents actually running in
+ * parallel?" — was one the product could not honestly answer yes to. Routing
+ * scored every task as if the ladder were idle, so with two agents connected
+ * the strongest one won every parallel task and the second sat unused. Several
+ * tasks at once, all on one provider, is one model with a queue.
+ *
+ * The fix is not a fairness rule. It is the latency axis being told the truth:
+ * a provider already working is genuinely slower to start the next thing.
+ */
+describe('spreading work across connected agents', () => {
+  const twoAgents = () => [
+    new FakeAdapter({
+      id: 'claude-code',
+      name: 'Claude Code',
+      kind: 'subscription',
+      models: [
+        makeModel({
+          id: 'cc/sonnet',
+          tier: 'mid',
+          capabilities: ['code', 'strong-reasoning', 'frontend'],
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: 55,
+        }),
+        makeModel({
+          id: 'cc/opus',
+          tier: 'large',
+          capabilities: ['code', 'strong-reasoning', 'frontend'],
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: 30,
+        }),
+      ],
+    }),
+    new FakeAdapter({
+      id: 'gemini-cli',
+      name: 'Gemini CLI',
+      kind: 'subscription',
+      models: [
+        makeModel({
+          id: 'gem/flash',
+          tier: 'small',
+          capabilities: ['code', 'cheap-ok'],
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: 110,
+        }),
+      ],
+    }),
+  ];
+
+  it('moves the next task to an idle agent when the first is working', () => {
+    const idle = scoreCandidates(twoAgents(), DEFAULT_ROUTING_POLICY, ctx());
+    const busy = scoreCandidates(
+      twoAgents(),
+      DEFAULT_ROUTING_POLICY,
+      ctx({ busyProviders: { [idle.chosen!.providerId]: 1 } }),
+    );
+    expect(busy.chosen!.providerId).not.toBe(idle.chosen!.providerId);
+  });
+
+  it('keeps a busy provider when it is the only one that suits the work', () => {
+    // The penalty must not become a rule that work is shared regardless of fit.
+    // Reasoning is something only one of these two claims.
+    const d = scoreCandidates(
+      twoAgents(),
+      DEFAULT_ROUTING_POLICY,
+      ctx({
+        task: { capability: 'strong-reasoning', complexity: 5, title: 'Design the data model', description: '' },
+        busyProviders: { 'claude-code': 1 },
+        preferTier: 'large',
+      }),
+    );
+    expect(d.chosen!.providerId).toBe('claude-code');
+  });
+
+  it('never lets being busy displace a provider the user pinned', () => {
+    const d = scoreCandidates(
+      twoAgents(),
+      DEFAULT_ROUTING_POLICY,
+      ctx({
+        task: {
+          capability: 'code',
+          complexity: 3,
+          title: 't',
+          description: '',
+          pinnedProviderId: 'claude-code',
+          pinnedModelId: 'cc/opus',
+        },
+        busyProviders: { 'claude-code': 3 },
+      }),
+    );
+    expect(d.chosen!.providerId).toBe('claude-code');
+    expect(d.chosen!.model.id).toBe('cc/opus');
+  });
+});
+
+describe('reaching the top rung', () => {
+  const claude = () => [
+    new FakeAdapter({
+      id: 'claude-code',
+      kind: 'subscription',
+      models: [
+        makeModel({
+          id: 'cc/sonnet',
+          tier: 'mid',
+          capabilities: ['code', 'strong-reasoning', 'frontend'],
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: 55,
+        }),
+        makeModel({
+          id: 'cc/opus',
+          tier: 'large',
+          capabilities: ['code', 'strong-reasoning', 'frontend'],
+          pricing: { inputPerMTok: 0, outputPerMTok: 0 },
+          throughputTps: 30,
+        }),
+      ],
+    }),
+  ];
+
+  it('picks the large model when the profile asked for one', () => {
+    // Sonnet and Opus advertise the same capabilities and both cost nothing on
+    // a subscription, so every tie fell to throughput and Opus was unreachable
+    // however hard the task was. The profile already decided; this is the wire
+    // that decision travels on.
+    const d = scoreCandidates(
+      claude(),
+      DEFAULT_ROUTING_POLICY,
+      ctx({
+        task: { capability: 'strong-reasoning', complexity: 5, title: 'Design the schema', description: '' },
+        preferTier: 'large',
+      }),
+    );
+    expect(d.chosen!.model.id).toBe('cc/opus');
+  });
+
+  it('does not reach for the large model on ordinary work', () => {
+    const d = scoreCandidates(claude(), DEFAULT_ROUTING_POLICY, ctx({ preferTier: 'mid' }));
+    expect(d.chosen!.model.id).toBe('cc/sonnet');
+  });
+});

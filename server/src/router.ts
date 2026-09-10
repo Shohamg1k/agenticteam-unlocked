@@ -185,6 +185,10 @@ export interface RouteTaskOptions {
   /** Providers already tried and failed for this task; excluded from the ladder. */
   exclude?: string[];
   expectedOutputTokens?: number;
+  /** How many tasks each provider is running right now, so work spreads. */
+  busyProviders?: Record<string, number>;
+  /** Weight class the task's execution profile asked for. */
+  preferTier?: 'small' | 'mid' | 'large';
 }
 
 /**
@@ -242,6 +246,8 @@ export function routeTask(opts: RouteTaskOptions): RoutingDecision {
     contextTokens: opts.contextTokens,
     expectedOutputTokens: opts.expectedOutputTokens,
     reliability: reliabilityScores(opts.projectId),
+    busyProviders: opts.busyProviders,
+    preferTier: opts.preferTier,
   });
 }
 

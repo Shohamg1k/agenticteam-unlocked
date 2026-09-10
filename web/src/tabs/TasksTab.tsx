@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import type { Task } from '@agentic/core';
 import { criticalPath, executionWaves, progressOf } from '@agentic/core';
+import { TaskRouting } from '../views/TaskRouting.js';
 import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
@@ -111,6 +112,19 @@ function TaskCard({ task, onCritical }: { task: Task; onCritical: boolean }) {
 
         {expanded && (
           <div className="col" style={{ gap: 6, marginTop: 8, fontSize: 'var(--text-xs)' }}>
+            {/*
+              Who runs this one, and how hard.
+
+              It lives in the graph rather than the sidebar because this is the
+              screen where you look at the whole plan at once — and the useful
+              decision is almost never "use Opus", it is "use Opus for the
+              schema and something cheap for the rest".
+            */}
+            <div className="col" style={{ gap: 4 }}>
+              <strong className="subtle">Run this on</strong>
+              <TaskRouting task={task} />
+            </div>
+
             <p className="muted" style={{ margin: 0, lineHeight: 1.5 }}>
               {task.description.slice(0, 600)}
               {task.description.length > 600 ? '…' : ''}

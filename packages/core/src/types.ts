@@ -92,6 +92,16 @@ export interface ModelDescriptor {
   pricing: ModelPricing;
   /** Rough tokens/second, used to rank on latency. Estimates, not promises. */
   throughputTps?: number;
+  /**
+   * Weight class within its provider, when the provider has more than one.
+   *
+   * Routing needs this because capability tags cannot separate a mid model
+   * from a large one — Sonnet and Opus advertise the same capabilities, so
+   * every tie between them fell to throughput and the larger model could
+   * never be chosen. The execution profile decides how much model a task
+   * deserves; this is what lets that decision reach the ladder.
+   */
+  tier?: 'small' | 'mid' | 'large';
   supportsStreaming: boolean;
   supportsTools: boolean;
   supportsVision: boolean;
@@ -326,6 +336,14 @@ export interface Task {
    * made the second one has a reason we do not get to overrule.
    */
   pinnedModelId?: string;
+  /**
+   * How hard this one task should think, when the user has an opinion.
+   *
+   * Orthogonal to the model, and deliberately so: "Opus on low effort" and
+   * "Haiku on high effort" are both sensible and mean different things. Absent
+   * means the profile decides, which is right for almost every task.
+   */
+  pinnedEffort?: ExecutionProfile['effort'];
   /** Provider that actually ran the accepted attempt. */
   providerId?: string;
   model?: string;
@@ -546,7 +564,7 @@ export interface ProjectSettings {
 }
 
 /** Re-exported shape; defined with the profiles it belongs to. */
-import type { ProfileOverrides } from './profiles.js';
+import type { ExecutionProfile, ProfileOverrides } from './profiles.js';
 
 /**
  * A question asked before the plan is written.

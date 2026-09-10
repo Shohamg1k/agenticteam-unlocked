@@ -410,13 +410,29 @@ export function buildRouter(): Router {
     }),
   );
 
+  // Guards the one field here that reaches a command line: an unrecognised
+  // --effort value makes a CLI agent exit non-zero, which would turn a typo in
+  // a request body into every task on that provider failing.
+  const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh']);
+
   router.patch(
     '/tasks/:id',
     handler((req, res) => {
       const found = findTask(req.params.id!);
       if (!found) return fail(res, 404, 'No such task');
-      const { pinnedProviderId, complexity, description, title } = req.body ?? {};
-      if (pinnedProviderId !== undefined) found.task.pinnedProviderId = pinnedProviderId || undefined;
+      const { pinnedProviderId, pinnedModelId, pinnedEffort, complexity, description, title } =
+        req.body ?? {};
+      if (pinnedProviderId !== undefined) {
+        found.task.pinnedProviderId = pinnedProviderId || undefined;
+        // Changing provider drops the model with it: an Opus id means nothing
+        // to Gemini, and a pin that silently points at a model the provider
+        // does not have falls back without saying so.
+        if (pinnedModelId === undefined) found.task.pinnedModelId = undefined;
+      }
+      if (pinnedModelId !== undefined) found.task.pinnedModelId = pinnedModelId || undefined;
+      if (pinnedEffort !== undefined) {
+        found.task.pinnedEffort = EFFORTS.has(pinnedEffort) ? pinnedEffort : undefined;
+      }
       if (typeof complexity === 'number')
         found.task.complexity = Math.min(5, Math.max(1, Math.round(complexity)));
       if (typeof description === 'string') found.task.description = description;

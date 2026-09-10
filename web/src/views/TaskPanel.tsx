@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
 import { IconPause, IconPlay, IconStop, IconTasks } from '../shell/Icons.js';
+import { TaskRouting } from './TaskRouting.js';
 
 /**
  * The task board in the sidebar: which agent is doing what, right now.
@@ -26,7 +27,22 @@ const STATUS_STYLE: Record<TaskStatus, { label: string; badge: string }> = {
   blocked: { label: 'Blocked', badge: 'badge--warning' },
 };
 
-export function TaskRow({ task, onOpen }: { task: Task; onOpen?: () => void }) {
+export function TaskRow({
+  task,
+  onOpen,
+  showRouting,
+}: {
+  task: Task;
+  onOpen?: () => void;
+  /**
+   * Show the per-task provider/model/effort controls.
+   *
+   * Off in the narrow sidebar, where three selects per row would bury the one
+   * thing that panel is for — what is happening right now. On in the task
+   * graph, which is where you go to change how the plan will run.
+   */
+  showRouting?: boolean;
+}) {
   const { snapshot } = useApp();
   const run = useAction();
   const provider = snapshot.providers.find((p) => p.id === task.providerId);
@@ -94,6 +110,8 @@ export function TaskRow({ task, onOpen }: { task: Task; onOpen?: () => void }) {
             {task.worklog[task.worklog.length - 1]!.text}
           </div>
         )}
+
+        {showRouting && <TaskRouting task={task} />}
       </div>
 
       {active && (
