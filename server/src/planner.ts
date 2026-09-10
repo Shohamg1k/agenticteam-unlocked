@@ -1,5 +1,6 @@
 import type {
   Capability,
+  ClarifyingAnswer,
   DevelopmentMode,
   PhaseGate,
   PhaseId,
@@ -19,6 +20,7 @@ import {
   plannerProfile,
   validateGraph,
 } from '@agentic/core';
+import { applyAnswers } from './clarify.js';
 import { buildCodeMap, renderCodeMap } from './codemap.js';
 import { bindingMemory } from './memory.js';
 import { profileProject } from './projects.js';
@@ -79,6 +81,8 @@ export interface PlanRequestOptions {
   mode: DevelopmentMode;
   signal?: AbortSignal;
   onEvent?: (text: string) => void;
+  /** What the user said when asked about the ambiguous parts of the prompt. */
+  answers?: ClarifyingAnswer[];
 }
 
 export interface PlanResult {
@@ -128,6 +132,51 @@ the work in front of you, not the impressiveness of the goal.
 
 Most tasks in a small plan are 2. A greenfield single-file deliverable is a 2
 even when the finished thing looks impressive.`;
+
+/**
+ * The section that decides whether the plan produces something usable or
+ * something that merely runs.
+ *
+ * A calendar tracker built from this planner let a user mark a day in the PAST
+ * as "waiting". Nothing in the pipeline was wrong: the plan was sensible, the
+ * task ran, the code compiled, the page rendered, verification passed. The
+ * brief simply never said what "waiting" means relative to today, so the agent
+ * never decided, and an app that looks finished shipped with a rule missing.
+ *
+ * Acceptance criteria are where that gets fixed, because they are the one part
+ * of the plan the executing agent is graded against.
+ */
+const DOMAIN_RULES = `## The rules of the thing being built
+
+Work out what is TRUE about the domain and put it in the plan. This is the
+difference between a project someone can use and a project that merely runs,
+and it is the step that is always skipped.
+
+For the goal in front of you, decide:
+
+- **What can each thing BE, and what follows what.** "Waiting", "done" and
+  "overdue" are three states with legal moves between them. If the plan does not
+  name them, the interface will let a user reach a combination nobody
+  considered — and that is exactly what they will call a bug.
+- **What is impossible.** A task waiting on a day that has already passed. A
+  quantity below one. An end before its start. A negative total. Every rule you
+  leave out is a defect you have already shipped.
+- **What moves on its own.** Anything derived from the current date has to still
+  be true tomorrow: "today" is computed at runtime, never hard-coded, and
+  something scheduled in the past is overdue rather than upcoming.
+- **What the first run looks like.** No data, nothing saved, no history. It is
+  the first thing a new user sees and the state most often left unhandled.
+- **What has to survive a reload.** If a person typed it in, they expect it back
+  after a refresh. With no backend that means localStorage, and it is three
+  lines — but only if the plan asks for it.
+
+Then write those into the "acceptance" array of the task that owns them, as
+statements a reviewer could check by using the app: "a date before today cannot
+be saved as waiting, and the app says why", not "handles dates correctly".
+
+Every deliverable a person will open also carries these, whether or not the
+request mentioned them: it works on a phone and on a desktop, every action gives
+visible feedback, and nothing it can be asked to do leaves it in a broken state.`;
 
 const INSTANT_RULES = `## How to decompose (Instant mode)
 
@@ -202,6 +251,8 @@ Your plan is executed literally. Vagueness becomes a merge conflict.
 
 ${opts.mode === 'professional' ? PROFESSIONAL_RULES : INSTANT_RULES}
 
+${DOMAIN_RULES}
+
 ${COMPLEXITY_RUBRIC}
 
 ## Choosing a model for each task
@@ -244,7 +295,7 @@ around it:
       "capability": "one of: ${ALL_CAPABILITIES.join(' | ')}",
       "complexity": 1,
       "dependsOn": [],
-      "acceptance": ["objectively checkable statement", "another one"],
+      "acceptance": ["objectively checkable statement — include the domain rules from the section above, e.g. 'a task cannot be saved as waiting on a date that has already passed, and the message says why'", "another one"],
       "contract": "the exact interface this task's output exposes — signatures, endpoints, file paths — that dependent tasks must code against. Omit only if nothing depends on this task.",
       "files": ["src/path/it/will/write.ts"],
       "provider": "provider id from the list above",
@@ -320,9 +371,13 @@ export async function createPlan(opts: PlanRequestOptions): Promise<PlanResult> 
 
   const context = await projectContext(opts.projectId);
   const roster = buildRoster();
-  const prompt = plannerPrompt({ goal: opts.goal, mode: opts.mode, projectContext: context, roster });
+  // The answers go into the goal the PLANNER reads, not the one the plan
+  // stores: the decomposition has to know what was settled, while the card in
+  // the UI should still say the sentence the user typed.
+  const goal = applyAnswers(opts.goal, opts.answers ?? []);
+  const prompt = plannerPrompt({ goal, mode: opts.mode, projectContext: context, roster });
 
-  const decision = routePlanner(opts.projectId, opts.goal, Math.ceil(prompt.length / 3.7), opts.mode);
+  const decision = routePlanner(opts.projectId, goal, Math.ceil(prompt.length / 3.7), opts.mode);
   if (!decision.chosen) {
     throw new PlannerError(
       'No provider is available to plan this work.',

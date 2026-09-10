@@ -116,6 +116,51 @@ export function checkGate(ctx: GateContext): GateDecision {
   }
 }
 
+/**
+ * May this task's files land on disk BEFORE the slow checks have run?
+ *
+ * `checkGate` deliberately refuses to accept anything unverified, and that is
+ * the right rule for accepting work. But it made "verified" and "on disk" the
+ * same moment, and they do not have to be: syntax, secrets and placeholders are
+ * decided in about a second, while the render pass and the project's own suite
+ * can take minutes and sometimes fail for reasons that have nothing to do with
+ * the code. For all of that time the user is watching a spinner over a project
+ * folder that is still empty, unable to open the thing that has, in fact,
+ * already been written.
+ *
+ * So this is the earlier and narrower question. It asks everything `checkGate`
+ * asks EXCEPT whether verification finished — taint, sensitivity, and the
+ * user's standing mode — and it only ever says yes where the final gate was
+ * going to say yes anyway. Nothing reaches disk here that would otherwise have
+ * waited for a person; it reaches disk sooner.
+ *
+ * The task is still not `done`, the checks still run, and a failure still sends
+ * the agent back to repair it — over the top of files the user could meanwhile
+ * see and click.
+ */
+export function checkEarlyWriteGate(ctx: {
+  projectId: string;
+  plan?: Plan;
+  task: Task;
+  paths: string[];
+}): GateDecision {
+  if (ctx.task.tainted && !ctx.task.taintAcknowledgedAt) {
+    return { allowed: false, requiresReview: true, reason: 'External content waits for an acknowledgement.' };
+  }
+
+  const mode = effectiveMode(ctx.projectId, ctx.plan);
+  if (mode === 'approval') {
+    return { allowed: false, requiresReview: true, reason: 'Approval mode: every change waits for you.' };
+  }
+
+  const sensitive = ctx.paths.filter(isSensitivePath);
+  if (sensitive.length && mode !== 'auto') {
+    return { allowed: false, requiresReview: true, reason: `Touches ${sensitive[0]}, so it waits for you.` };
+  }
+
+  return { allowed: true, requiresReview: false, reason: 'Written early so you can open it while the checks run.' };
+}
+
 /** Record an automatic acceptance. Auditing these is what makes auto mode defensible. */
 export function auditAutoAccept(projectId: string, task: Task, reason: string): void {
   log(`Auto-accepted "${task.title}" (${task.producedFiles?.length ?? 0} file(s)) — ${reason}`, 'info', {

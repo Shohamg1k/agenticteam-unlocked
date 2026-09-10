@@ -5,6 +5,8 @@ import type {
   AgentRunEvent,
   ApplyDiffRequest,
   Checkpoint,
+  ClarifyRequest,
+  ClarifyResponse,
   CreatePlanRequest,
   ElementTarget,
   MemoryNote,
@@ -169,6 +171,7 @@ export const api = {
   // Plans and tasks
   createPlan: (body: CreatePlanRequest) =>
     post<{ plan: Plan; tasks: Task[]; plannedBy: string }>('/plans', body),
+  clarify: (body: ClarifyRequest) => post<ClarifyResponse>('/plans/clarify', body),
   startPlan: (id: string) => post(`/plans/${id}/start`),
   pausePlan: (id: string) => post(`/plans/${id}/pause`),
   resumePlan: (id: string) => post(`/plans/${id}/resume`),

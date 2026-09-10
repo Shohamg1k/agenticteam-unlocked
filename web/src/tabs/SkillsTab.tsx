@@ -19,6 +19,30 @@ export function SkillsTab() {
   const run = useAction();
 
   const [tab, setTab] = useState<'skills' | 'agents'>('skills');
+
+  /**
+   * Which specialists this project may draw on.
+   *
+   * Absent means all of them, which is what almost everyone wants and what the
+   * checkboxes therefore show as ticked. The list only starts existing once
+   * somebody unticks something — storing "all fourteen" the moment the screen
+   * opens would silently freeze the roster, so a built-in added in a later
+   * version would never reach a project that had merely been looked at.
+   */
+  const enabledAgents = activeProject?.settings.enabledAgents;
+
+  const setAgents = (next: string[] | undefined) => {
+    if (!activeProject) return;
+    void api.updateProjectSettings(activeProject.id, { enabledAgents: next ?? (null as never) });
+  };
+
+  const toggleAgent = (name: string, on: boolean) => {
+    const current = enabledAgents ?? snapshot.agents.map((a) => a.name);
+    const next = on ? [...new Set([...current, name])] : current.filter((n) => n !== name);
+    // Back to everything ticked is the same state as never having chosen, and
+    // storing it as a list would pin the roster to today's built-ins.
+    setAgents(next.length === snapshot.agents.length ? undefined : next);
+  };
   const [editing, setEditing] = useState<SkillDef | null>(null);
   const [draft, setDraft] = useState({ name: '', description: '', whenToUse: '', body: '' });
 
@@ -196,17 +220,38 @@ export function SkillsTab() {
         ) : (
           <>
             <p className="muted" style={{ marginTop: 0, lineHeight: 1.6 }}>
-              Agent profiles define the Professional-mode team. Each has a role, a system prompt describing
-              the artefacts it must produce, and preferred providers — advisory, since the ladder still backs
-              them up.
+              Agent profiles define the team. Each has a role, a system prompt describing what it must
+              produce, and preferred providers — advisory, since the ladder still backs them up. A task is
+              handed to a specialist only when one clearly fits; untick any you would rather it never
+              reached for.
             </p>
+
+            <div className="row" style={{ gap: 8, marginBottom: 'var(--space-2)' }}>
+              <span className="subtle grow" style={{ fontSize: 'var(--text-xs)' }}>
+                {enabledAgents
+                  ? `${enabledAgents.length} of ${snapshot.agents.length} available to this project`
+                  : `All ${snapshot.agents.length} available to this project`}
+              </span>
+              {enabledAgents && (
+                <button type="button" className="btn btn--ghost btn--sm" onClick={() => setAgents(undefined)}>
+                  Use all of them
+                </button>
+              )}
+            </div>
 
             <div className="col" style={{ gap: 'var(--space-2)' }}>
               {snapshot.agents.map((agent) => (
                 <div key={agent.name} className="card">
                   <div className="card__body">
                     <div className="row" style={{ gap: 8 }}>
-                      <strong className="grow">{agent.description || agent.name}</strong>
+                      <label className="row grow" style={{ gap: 8, cursor: 'pointer' }}>
+                        <input
+                          type="checkbox"
+                          checked={!enabledAgents || enabledAgents.includes(agent.name)}
+                          onChange={(e) => toggleAgent(agent.name, e.target.checked)}
+                        />
+                        <strong>{agent.description || agent.name}</strong>
+                      </label>
                       <span className="badge badge--neutral">{agent.capability}</span>
                       <span className={`badge badge--${agent.source === 'builtin' ? 'neutral' : 'accent'}`}>
                         {agent.source}

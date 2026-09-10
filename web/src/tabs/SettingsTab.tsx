@@ -4,6 +4,7 @@ import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
 import { ProviderRow } from '../views/ProviderPanel.js';
+import { ModelPicker, describeChoice } from '../views/ModelPicker.js';
 import { IconRefresh } from '../shell/Icons.js';
 
 type Section = 'providers' | 'gate' | 'execution' | 'appearance' | 'plugins' | 'about';
@@ -108,6 +109,21 @@ External content still always waits for an explicit acknowledgement. Every autom
                   logs.
                 </p>
               </div>
+
+              {activeProject && (
+                <div className="card">
+                  <div className="card__body col" style={{ gap: 8 }}>
+                    <div className="row" style={{ gap: 10, alignItems: 'center' }}>
+                      <strong style={{ fontSize: 'var(--text-sm)' }}>Who runs the work</strong>
+                      <span className="grow" />
+                      <ModelPicker compact />
+                    </div>
+                    <p className="muted" style={{ margin: 0, fontSize: 'var(--text-sm)', lineHeight: 1.6 }}>
+                      {describeChoice(snapshot.providers, activeProject.settings.preferredProvider)}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="row">
                 <button

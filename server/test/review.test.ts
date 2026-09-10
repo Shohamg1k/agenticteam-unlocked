@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import type { Plan, Task, VerificationReport } from '@agentic/core';
-import { checkGate, isSensitivePath } from '../src/review.js';
+import { checkEarlyWriteGate, checkGate, isSensitivePath } from '../src/review.js';
 import { DEFAULT_NODE_CONFIG, state } from '../src/store.js';
 
 /**
@@ -196,5 +196,82 @@ describe('checkGate — per-plan override', () => {
       plan: autoPlan,
     });
     expect(decision.allowed).toBe(false);
+  });
+});
+
+/**
+ * Writing the files before the slow checks finish.
+ *
+ * The demo failure that produced this: a prompt sat at "verifying" for minutes
+ * over an empty project folder, then failed, and the user got nothing at all —
+ * even though working code had existed the whole time, held in memory behind a
+ * render pass and a test run.
+ *
+ * The fix moves WHEN files land, and must not move WHETHER they do. So the
+ * property under test is a relation between the two gates rather than any
+ * single answer: the early gate must never allow something the final gate
+ * would have sent to a person. If that ever breaks, this feature has quietly
+ * become an auto-accept, which is exactly the promise the product makes.
+ */
+describe('checkEarlyWriteGate', () => {
+  const paths = ['src/app.tsx'];
+
+  it('writes early in auto mode, so the preview has something to serve', () => {
+    state.config.executionMode = 'auto';
+    const decision = checkEarlyWriteGate({ projectId: 'p', plan, task: makeTask(), paths });
+    expect(decision.allowed).toBe(true);
+  });
+
+  it('writes early in hybrid mode for ordinary files', () => {
+    state.config.executionMode = 'hybrid';
+    expect(checkEarlyWriteGate({ projectId: 'p', plan, task: makeTask(), paths }).allowed).toBe(true);
+  });
+
+  it('never writes early in approval mode', () => {
+    // A user who asked to approve every change has not asked to approve it
+    // after it happened.
+    state.config.executionMode = 'approval';
+    expect(checkEarlyWriteGate({ projectId: 'p', plan, task: makeTask(), paths }).allowed).toBe(false);
+  });
+
+  it('never writes tainted work early, in any mode', () => {
+    for (const mode of ['approval', 'hybrid', 'auto'] as const) {
+      state.config.executionMode = mode;
+      const task = makeTask({ tainted: true, taintSource: 'a GitHub issue' });
+      expect(checkEarlyWriteGate({ projectId: 'p', plan, task, paths }).allowed).toBe(false);
+    }
+  });
+
+  it('holds sensitive files back unless the user chose auto', () => {
+    state.config.executionMode = 'hybrid';
+    const sensitive = ['.env'];
+    expect(checkEarlyWriteGate({ projectId: 'p', plan, task: makeTask(), paths: sensitive }).allowed).toBe(
+      false,
+    );
+
+    state.config.executionMode = 'auto';
+    expect(checkEarlyWriteGate({ projectId: 'p', plan, task: makeTask(), paths: sensitive }).allowed).toBe(
+      true,
+    );
+  });
+
+  it('never allows what the final gate would have sent to a person', () => {
+    // The invariant. Everything above is an example of it; this is the rule.
+    for (const mode of ['approval', 'hybrid', 'auto'] as const) {
+      for (const tainted of [false, true]) {
+        for (const files of [['src/app.tsx'], ['.env'], ['package.json', 'src/app.tsx']]) {
+          state.config.executionMode = mode;
+          const task = makeTask({ tainted, producedFiles: files });
+          const early = checkEarlyWriteGate({ projectId: 'p', plan, task, paths: files });
+          const final = checkGate({ projectId: 'p', kind: 'task', task, plan });
+          if (early.allowed) {
+            expect(
+              final.allowed,
+              `early write allowed but the final gate held it: mode=${mode} tainted=${tainted} files=${files.join(',')}`,
+            ).toBe(true);
+          }
+        }
+      }
+    }
   });
 });

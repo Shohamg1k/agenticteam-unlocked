@@ -3,6 +3,8 @@ import type { Request, Response, Router } from 'express';
 import type {
   ApplyDiffRequest,
   ExecutionMode,
+  ClarifyRequest,
+  ClarifyResponse,
   CreatePlanRequest,
   FileDiff,
   ElementTarget,
@@ -22,6 +24,7 @@ import {
   resumePlan,
   startPlan,
 } from './orchestrator.js';
+import { proposeQuestions } from './clarify.js';
 import { createPlan, PlannerError } from './planner.js';
 import {
   closeProject,
@@ -317,11 +320,37 @@ export function buildRouter(): Router {
       const projectId = requireProjectId(req);
       const mode = body.mode === 'professional' ? 'professional' : 'instant';
 
-      const result = await createPlan({ projectId, goal: String(body.goal ?? ''), mode });
+      const result = await createPlan({
+        projectId,
+        goal: String(body.goal ?? ''),
+        mode,
+        answers: Array.isArray(body.answers) ? body.answers : undefined,
+      });
       if (body.executionMode) result.plan.executionMode = body.executionMode;
 
       if (body.autoStart) await startPlan(projectId, result.plan.id);
       ok(res, { plan: result.plan, tasks: result.tasks, plannedBy: result.plannedBy });
+    }),
+  );
+
+  /**
+   * What is ambiguous about this prompt?
+   *
+   * Its own call rather than a step inside `/plans`, because the user answers
+   * in between and the two are seconds apart in the UI but a round trip apart
+   * in fact. Returning an empty list is a normal outcome and means "nothing
+   * here needs asking" — the client goes straight to building.
+   */
+  router.post(
+    '/plans/clarify',
+    handler(async (req, res) => {
+      const body = req.body as ClarifyRequest;
+      const questions = await proposeQuestions({
+        projectId: requireProjectId(req),
+        goal: String(body.goal ?? ''),
+        mode: body.mode === 'professional' ? 'professional' : 'instant',
+      });
+      ok(res, { questions } satisfies ClarifyResponse);
     }),
   );
 

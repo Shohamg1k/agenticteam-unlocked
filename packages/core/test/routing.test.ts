@@ -130,6 +130,101 @@ describe('scoreCandidates', () => {
     expect(['claude-code', 'anthropic', 'openai']).toContain(d.chosen!.providerId);
   });
 
+  /**
+   * The user's own choice.
+   *
+   * Routing exists because the right model for a migration is not the right
+   * model for a rename, and it is the product's whole argument. But someone
+   * comparing two models on one prompt, or spending a budget that is not
+   * theirs, has a reason that no cost score gets to overrule — and a pin that
+   * quietly returns the cheap model instead is worse than having no pin,
+   * because the user believes it worked.
+   */
+  describe('a model the user pinned', () => {
+    const withTwoModels = () => [
+      new FakeAdapter({
+        id: 'anthropic',
+        name: 'Anthropic API',
+        kind: 'byok',
+        models: [
+          makeModel({
+            id: 'claude-haiku-4-5',
+            capabilities: ['cheap-ok', 'code'],
+            pricing: { inputPerMTok: 0.8, outputPerMTok: 4 },
+            throughputTps: 200,
+          }),
+          makeModel({
+            id: 'claude-opus-5',
+            capabilities: ['code', 'strong-reasoning', 'frontend'],
+            pricing: { inputPerMTok: 15, outputPerMTok: 75 },
+            throughputTps: 40,
+          }),
+        ],
+      }),
+      ...providerSet(),
+    ];
+
+    it('wins over the cheaper, faster model in the same provider', () => {
+      // The case that decides whether the setting is real: on a small task,
+      // every axis the router scores prefers Haiku.
+      const d = scoreCandidates(
+        withTwoModels(),
+        DEFAULT_ROUTING_POLICY,
+        ctx({
+          task: {
+            capability: 'cheap-ok',
+            complexity: 1,
+            title: 'Rename a variable',
+            description: '',
+            pinnedProviderId: 'anthropic',
+            pinnedModelId: 'claude-opus-5',
+          },
+        }),
+      );
+      expect(d.chosen!.model.id).toBe('claude-opus-5');
+      expect(d.explanation).toContain('you chose this model');
+    });
+
+    it('keeps the whole ladder behind it, so a failure still has somewhere to go', () => {
+      const d = scoreCandidates(
+        withTwoModels(),
+        DEFAULT_ROUTING_POLICY,
+        ctx({
+          task: {
+            capability: 'code',
+            complexity: 3,
+            title: 't',
+            description: '',
+            pinnedProviderId: 'anthropic',
+            pinnedModelId: 'claude-opus-5',
+          },
+        }),
+      );
+      expect(d.ladder.length).toBeGreaterThan(1);
+      expect(d.ladder[0]!.model.id).toBe('claude-opus-5');
+    });
+
+    it('falls through when the pinned model is not there', () => {
+      // Unplugging a key should not strand every task in the project.
+      const d = scoreCandidates(
+        providerSet(),
+        DEFAULT_ROUTING_POLICY,
+        ctx({
+          task: {
+            capability: 'code',
+            complexity: 3,
+            title: 't',
+            description: '',
+            pinnedProviderId: 'anthropic',
+            pinnedModelId: 'a-model-that-was-uninstalled',
+          },
+        }),
+      );
+      expect(d.chosen).toBeDefined();
+      expect(d.chosen!.providerId).toBe('anthropic');
+    });
+  });
+
   it('routes an oversized context to the long-context model, ignoring price', () => {
     const d = scoreCandidates(providerSet(), DEFAULT_ROUTING_POLICY, ctx({ contextTokens: 400_000 }));
     expect(d.chosen!.providerId).toBe('google');

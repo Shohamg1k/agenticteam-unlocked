@@ -174,7 +174,18 @@ function loadProjectSettings(root: string): ProjectSettings {
 export function saveProjectSettings(projectId: string, patch: Partial<ProjectSettings>): ProjectSettings {
   const project = getProject(projectId);
   if (!project) throw new ProjectError(`No such project: ${projectId}`);
-  project.settings = { ...project.settings, ...patch };
+
+  // A patch cannot express "unset this" by omission — omission is how it says
+  // "leave it alone" — so `null` is the word for it. Every optional setting
+  // here has a meaningful absent state (route freely, use every agent, detect
+  // the dev server), and a UI that can turn a preference on but never off is
+  // not a preference.
+  const next: Record<string, unknown> = { ...project.settings };
+  for (const [key, value] of Object.entries(patch)) {
+    if (value === null) delete next[key];
+    else next[key] = value;
+  }
+  project.settings = next as unknown as ProjectSettings;
   writeJsonAtomic(projectPaths(project.root).config, project.settings);
   saveProjects();
   return project.settings;

@@ -38,14 +38,15 @@ import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
 import { repairFeedback, scanForSecrets, verifyArtifacts } from './verify.js';
 import { findPlaceholders, placeholderFeedback, placeholderIssues } from './placeholders.js';
 import { runVisualCheck } from './visual/check.js';
-import { auditAutoAccept, checkGate, enqueueReview } from './review.js';
+import { auditAutoAccept, checkEarlyWriteGate, checkGate, enqueueReview } from './review.js';
 import { takeCheckpoint } from './checkpoints.js';
 import { collectWorktreeChanges, createWorktree } from './git.js';
 import type { Worktree } from './git.js';
 import { startCooldown } from './quota.js';
 import { addMemory } from './memory.js';
 import { forgetPreviewCapability } from './preview.js';
-import { activeSkillsFor, loadAgents } from './skills.js';
+import { nudgePreview, resetPreviewNudge } from './livepreview.js';
+import { activeAgents, activeSkillsFor } from './skills.js';
 import { DEFAULT_AGENT_BY_CAPABILITY } from './library/agents.js';
 import { getProject } from './projects.js';
 import { changed, projectState, savePlan, tasksOfPlan } from './store.js';
@@ -159,6 +160,10 @@ export async function startPlan(projectId: string, planId: string): Promise<RunH
   run.codeMap = await buildCodeMap(ps.root).catch(() => undefined);
 
   await takeCheckpoint(projectId, `before plan: ${plan.goal.slice(0, 60)}`, { planId });
+
+  // A fresh run reports the state of the preview afresh: "there is nothing to
+  // serve yet" is worth saying once per run, not once ever.
+  resetPreviewNudge(projectId);
 
   log(`Started plan "${plan.goal.slice(0, 60)}" (${plan.mode} mode)`, 'info', { projectId, planId });
   savePlan(projectId, planId);
@@ -533,7 +538,7 @@ async function executeTask(run: RunState, task: Task, signal: AbortSignal): Prom
    * and a nearly-right specialist is worse than none, because it makes the
    * model confident about the wrong domain.
    */
-  const roster = loadAgents(run.projectId);
+  const roster = activeAgents(run.projectId);
   const specialist =
     selectAgent(roster, task) ??
     fallbackSpecialist(roster, task.capability);
@@ -1025,6 +1030,42 @@ async function runAttempt(args: {
     return { kind: 'verification-failed', feedback };
   }
 
+  // ---- Land the files, now ---------------------------------------------
+  //
+  // Everything above this line is decided in about a second: a parse, a secret
+  // scan, a placeholder scan. Everything below it can take minutes — a render
+  // pass, an install, the project's own suite — and can fail for reasons that
+  // have nothing to do with the code in front of us.
+  //
+  // Holding the files back for all of that made the two indistinguishable from
+  // outside. The task sat at "verifying" over an empty project folder, the
+  // preview had nothing to serve, and if a check then failed the user had
+  // watched a spinner for two minutes and received nothing at all — which is
+  // exactly the report that came back from the demo.
+  //
+  // So the files land here, where they are already known to parse and to carry
+  // no secrets, and the checks run over the top of them. This does not accept
+  // anything a person would otherwise have reviewed: `checkEarlyWriteGate` asks
+  // the same questions about taint, sensitivity and the user's mode that the
+  // final gate asks, and only says yes where the final gate was going to. What
+  // changes is when the user can open the thing, not whether they should.
+  const earlyGate = checkEarlyWriteGate({
+    projectId: run.projectId,
+    plan: run.plan,
+    task,
+    paths: files.map((f) => f.path),
+  });
+
+  if (earlyGate.allowed) {
+    await applyFiles(run.projectId, task, files);
+    worklog(
+      task,
+      'orchestrator',
+      `Wrote ${files.length} file(s) to the project. You can open them now — the remaining checks run over the top.`,
+    );
+    nudgePreview(run.projectId, (message) => worklog(task, 'preview', message));
+  }
+
   // ---- Visual: does it actually render? --------------------------------
   //
   // Between the two tiers, and the reason it exists is a run that got all the
@@ -1141,6 +1182,10 @@ async function runAttempt(args: {
   const decision = checkGate({ projectId: run.projectId, kind: 'task', task, plan: run.plan });
 
   if (decision.allowed) {
+    // Usually a no-op: the early write already put these on disk, and
+    // `applyFiles` is idempotent for identical content. It still runs, because
+    // the early gate is the narrower of the two and can decline where this one
+    // allows — a hybrid-mode task touching a sensitive path, for instance.
     await applyFiles(run.projectId, task, files);
     task.status = 'done';
     auditAutoAccept(run.projectId, task, decision.reason);

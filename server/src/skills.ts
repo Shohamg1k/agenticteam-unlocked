@@ -227,6 +227,29 @@ export function loadAgents(projectId: string): AgentProfile[] {
   return ps.agents;
 }
 
+/**
+ * The roster a run may actually draw on.
+ *
+ * `loadAgents` answers "what exists", which is what the settings screen wants
+ * to list. This answers "what may run", which is what the orchestrator wants —
+ * and they differ only when a user has gone into the roster and turned things
+ * off, which is rare and deliberate.
+ *
+ * An empty or absent list means everything, not nothing. Someone who unticks
+ * the last agent has expressed a preference about specialists, not a wish for
+ * the run to have nobody to give the work to, and the generic worker prompt
+ * they would fall back to is the same one they get with no roster at all.
+ */
+export function activeAgents(projectId: string): AgentProfile[] {
+  const all = loadAgents(projectId);
+  const enabled = getProject(projectId)?.settings.enabledAgents;
+  if (!enabled?.length) return all;
+
+  const allowed = new Set(enabled);
+  const chosen = all.filter((a) => allowed.has(a.name));
+  return chosen.length ? chosen : all;
+}
+
 function readAgentsFrom(dir: string, source: AgentProfile['source']): AgentProfile[] {
   const out: AgentProfile[] = [];
   let entries: fs.Dirent[];

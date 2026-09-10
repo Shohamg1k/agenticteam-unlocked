@@ -319,6 +319,13 @@ export interface Task {
   plannedReason?: string;
   /** Provider the user pinned. Outranks the planner; ladder still backs it up. */
   pinnedProviderId?: string;
+  /**
+   * Model the user pinned inside that provider. Only meaningful alongside
+   * `pinnedProviderId`: "Claude" is a choice about who does the work, "Opus"
+   * is a choice about how much of it you are paying for, and a user who has
+   * made the second one has a reason we do not get to overrule.
+   */
+  pinnedModelId?: string;
   /** Provider that actually ran the accepted attempt. */
   providerId?: string;
   model?: string;
@@ -510,6 +517,25 @@ export interface ProjectSettings {
   /** Skills enabled for this project, by name. */
   skills: string[];
   /**
+   * The user's standing choice of who does the work.
+   *
+   * Absent means "route each task to whatever suits it", which is the product's
+   * whole argument and the right default. Present means the user has decided
+   * otherwise — they trust one model, or they are spending someone else's
+   * budget, or they are comparing two on the same prompt — and a preference
+   * stated that plainly is not a hint to weigh against cost.
+   *
+   * `modelId` is optional on purpose: "use Claude" and "use Claude Opus" are
+   * different amounts of opinion, and both are reasonable.
+   */
+  preferredProvider?: { providerId: string; modelId?: string };
+  /**
+   * Specialist agents this project may draw on, by id. Absent means all of
+   * them, which is what almost everyone wants; a list is for someone who has
+   * looked at the roster and decided.
+   */
+  enabledAgents?: string[];
+  /**
    * How hard tasks in this project should try, when the per-task decision is
    * not what the user wants. Absent means "decide per task", which is the
    * default and the right answer for almost everyone.
@@ -521,6 +547,42 @@ export interface ProjectSettings {
 
 /** Re-exported shape; defined with the profiles it belongs to. */
 import type { ProfileOverrides } from './profiles.js';
+
+/**
+ * A question asked before the plan is written.
+ *
+ * Every ambiguity in a prompt gets resolved by somebody. Today that somebody is
+ * a model, silently, at the moment it starts typing — which is how "build me a
+ * login page with node" became an HTML file, and how a tracker ended up with no
+ * persistence nobody had said it did not want.
+ *
+ * A handful of questions, answered in about five seconds, moves that decision
+ * to the person who actually knows. Every question carries an "auto" option
+ * because a user who does not care must not be made to care: the point is to
+ * offer the choice, not to collect it.
+ */
+export interface ClarifyingQuestion {
+  id: string;
+  /** Two or three words for the chip above the options. */
+  header: string;
+  question: string;
+  options: ClarifyingOption[];
+  /** True when several answers can be true at once. */
+  multi?: boolean;
+}
+
+export interface ClarifyingOption {
+  id: string;
+  label: string;
+  /** One line on what picking this actually changes. */
+  detail?: string;
+}
+
+/** What the user said, folded into the goal the planner receives. */
+export interface ClarifyingAnswer {
+  question: string;
+  answer: string;
+}
 
 export interface Checkpoint {
   id: string;

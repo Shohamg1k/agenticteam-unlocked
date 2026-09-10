@@ -50,6 +50,51 @@ const skill = (
 
 const UNIVERSAL: SkillDef[] = [
   skill(
+    'rules-before-code',
+    'Work out what is true about the thing, then make the code enforce it',
+    'Every task that builds a feature a person will use',
+    [],
+    [],
+    `The difference between an app that demos and an app that works is almost never
+the code. It is the rules — and the rules are what gets skipped.
+
+A calendar tracker was built that let you mark a day in the PAST as "waiting".
+It compiled, it rendered, the styling was good. It was broken, because nobody
+decided what "waiting" means relative to today.
+
+**Write the rules down first.** Five minutes with the domain, before any code:
+
+- What can each thing BE? "Waiting", "done", "overdue" are three states. Which
+  can follow which? What does each look like? If you cannot name the
+  transitions, the interface will let someone reach a combination you never
+  considered, and that is precisely what "buggy" means to them.
+- What is impossible? A task waiting on a day that has gone. A quantity below
+  one. An end date before a start date. A total that is negative. Every one of
+  these is a rule, and every rule you do not write down is a bug you shipped.
+- What changes on its own? Anything derived from the current time keeps being
+  true tomorrow or it is wrong by Tuesday. Compute "today"; never hard-code the
+  day you wrote it. Something scheduled for the past is overdue, not upcoming.
+- What does the first run look like? No data, no history, nothing saved. That
+  is the first thing a new user sees, and it is the state most often left
+  unstyled and unexplained.
+
+**Enforce them where the state changes, not only where it is typed.** A date
+picker that hides past dates and a save that accepts one is still broken —
+somebody will reach it by keyboard, by paste, by a stale form, by a reload.
+Validate at the point the value is written, and let the input hint at the same
+rule so the user finds out early rather than at the end.
+
+**Say no in a sentence they understand.** "Invalid input" tells a person
+nothing. "Pick a date from today onwards — this one has already passed" tells
+them the rule and how to satisfy it.
+
+**Then use it.** Before you emit, walk the thing as if you were seeing it for
+the first time: open it empty, add one, add ten, put in something absurd,
+reload the page, resize the window. Every bug you find here is a bug the user
+does not.`,
+  ),
+
+  skill(
     'match-the-codebase',
     'Write code that reads like the code already there',
     'Any task that edits an existing project',

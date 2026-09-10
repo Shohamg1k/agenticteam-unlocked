@@ -4,6 +4,8 @@ import type {
   AgentRunEvent,
   AgentProfile,
   Checkpoint,
+  ClarifyingAnswer,
+  ClarifyingQuestion,
   ConnectorDef,
   ExecutionMode,
   InstalledPlugin,
@@ -271,6 +273,22 @@ export interface CreatePlanRequest {
   executionMode?: ExecutionMode;
   /** Skip the approval step and start immediately. */
   autoStart?: boolean;
+  /**
+   * What the user said when asked about the ambiguous parts of the prompt.
+   * Folded into the goal as settled decisions; absent means nobody asked, which
+   * is the same thing as answering every question with "auto".
+   */
+  answers?: ClarifyingAnswer[];
+}
+
+export interface ClarifyRequest {
+  projectId: string;
+  goal: string;
+  mode: 'instant' | 'professional';
+}
+
+export interface ClarifyResponse {
+  questions: ClarifyingQuestion[];
 }
 
 export interface ScopedEditRequest {

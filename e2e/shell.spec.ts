@@ -149,8 +149,10 @@ test.describe('the shell', () => {
     await page.getByRole('button', { name: 'Providers', exact: true }).click();
 
     // An unconfigured provider must say what to do about it, not just "off".
-    // This is the assertion that would catch a regression to a bare status.
+    // This is the assertion that would catch a regression to a bare status,
+    // and it covers both shapes of "not ready": a key that is missing, and a
+    // command-line tool that is not installed. They need different sentences.
     await expect(page.getByText(/Add an Anthropic API key in Settings/)).toBeVisible();
-    await expect(page.getByText(/free at console\.groq\.com/)).toBeVisible();
+    await expect(page.getByText(/npm i -g @openai\/codex/)).toBeVisible();
   });
 });

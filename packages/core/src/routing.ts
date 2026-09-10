@@ -264,7 +264,13 @@ export interface RoutingDecision {
 export interface RouteContext {
   task: Pick<
     Task,
-    'capability' | 'complexity' | 'title' | 'description' | 'pinnedProviderId' | 'plannedProviderId'
+    | 'capability'
+    | 'complexity'
+    | 'title'
+    | 'description'
+    | 'pinnedProviderId'
+    | 'pinnedModelId'
+    | 'plannedProviderId'
   > & {
     role?: TeamRole;
     plannedModel?: string;
@@ -396,6 +402,11 @@ export function scoreCandidates(
       if (preferIdx >= 0) score += (preferOrder.length - preferIdx) * 0.5;
       if (ctx.task.pinnedProviderId === adapter.id) score += 1000;
       else if (ctx.task.plannedProviderId === adapter.id) score += 3;
+      // A model the user named is a bigger boost than one a policy rule
+      // suggests, and it has to be big enough to beat the score gap between a
+      // provider's cheapest model and its best — otherwise "use Opus" quietly
+      // returns Haiku and the setting looks broken.
+      if (ctx.task.pinnedModelId === model.id) score += 500;
       if (pinnedModel && model.id === pinnedModel) score += 2;
       if (ctx.task.plannedModel && model.id === ctx.task.plannedModel) score += 1;
 
@@ -477,7 +488,11 @@ function explain(
   const rule = rules[rules.length - 1];
   const cost = chosen.estimatedCostUsd === 0 ? 'free' : `~$${chosen.estimatedCostUsd.toFixed(3)}`;
   const why =
-    ctx.task.pinnedProviderId === chosen.providerId ? 'pinned by you' : (rule?.name ?? 'base weights');
+    ctx.task.pinnedProviderId === chosen.providerId
+      ? ctx.task.pinnedModelId === chosen.model.id
+        ? 'you chose this model'
+        : 'pinned by you'
+      : (rule?.name ?? 'base weights');
   return `${chosen.providerName} / ${chosen.model.label} for ${ctx.task.capability} at complexity ${ctx.task.complexity} (${why}); ${cost}.`;
 }
 

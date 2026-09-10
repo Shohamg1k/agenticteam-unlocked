@@ -195,9 +195,35 @@ export interface RouteTaskOptions {
  * recovered mid-plan is available again to later tasks, and one that just
  * refused us is not retried for this one.
  */
+/**
+ * The user's standing choice of who does the work, if they made one.
+ *
+ * Routing exists because the right model for a migration is not the right
+ * model for a rename, and most of the time nobody should have to think about
+ * it. But "most of the time" is not "always": someone comparing two models on
+ * the same prompt, or spending a budget that is not theirs, or who simply
+ * trusts one, has a reason we do not get to weigh against a cost score.
+ *
+ * A task's own pin still wins, because it is the more specific statement.
+ */
+function userPreference(projectId: string, task: Task): { providerId?: string; modelId?: string } {
+  if (task.pinnedProviderId) {
+    return { providerId: task.pinnedProviderId, modelId: task.pinnedModelId };
+  }
+  const preferred = getProject(projectId)?.settings.preferredProvider;
+  if (!preferred?.providerId) return {};
+
+  // A preference for something that is not connected is not an error and not
+  // worth a warning every task: the boost simply matches nothing and the
+  // ladder routes normally, which is the behaviour someone would want after
+  // unplugging a key mid-project.
+  return { providerId: preferred.providerId, modelId: preferred.modelId };
+}
+
 export function routeTask(opts: RouteTaskOptions): RoutingDecision {
   const policy = activePolicy(opts.projectId);
   const excluded = new Set(opts.exclude ?? []);
+  const preference = userPreference(opts.projectId, opts.task);
   const providers = availableProviders().filter((p) => !excluded.has(p.id));
 
   return scoreCandidates(providers, policy, {
@@ -207,7 +233,8 @@ export function routeTask(opts: RouteTaskOptions): RoutingDecision {
       title: opts.task.title,
       description: opts.task.description,
       role: opts.task.role,
-      pinnedProviderId: opts.task.pinnedProviderId,
+      pinnedProviderId: preference.providerId,
+      pinnedModelId: preference.modelId,
       plannedProviderId: opts.task.plannedProviderId,
       plannedModel: opts.task.plannedModel,
     },
@@ -232,6 +259,10 @@ export function routePlanner(
   mode: 'instant' | 'professional',
 ): RoutingDecision {
   const policy = activePolicy(projectId);
+  // Planning honours the same choice the tasks do. Someone who pinned a model
+  // and then watched a different one write their plan would reasonably call
+  // the setting broken.
+  const preferred = getProject(projectId)?.settings.preferredProvider;
   return scoreCandidates(availableProviders(), policy, {
     task: {
       capability: 'strong-reasoning',
@@ -239,6 +270,8 @@ export function routePlanner(
       title: 'Plan the work',
       description: goal,
       role: 'lead',
+      pinnedProviderId: preferred?.providerId,
+      pinnedModelId: preferred?.modelId,
     },
     mode,
     contextTokens,

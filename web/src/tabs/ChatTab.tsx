@@ -1,11 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import type { DevelopmentMode, ExecutionMode } from '@agentic/core';
+import type { ClarifyingAnswer, ClarifyingQuestion, DevelopmentMode, ExecutionMode } from '@agentic/core';
 import { api } from '../api.js';
 import { useAction, useApp } from '../state.js';
 import { useTabs } from '../shell/tabs.js';
 import { GoLiveButton } from '../shell/GoLiveButton.js';
 import { TaskRow } from '../views/TaskPanel.js';
 import { OpenFolderButton } from '../views/FileTree.js';
+import { ClarifyPanel } from '../views/ClarifyPanel.js';
+import { ModelPicker } from '../views/ModelPicker.js';
 import { IconSend } from '../shell/Icons.js';
 
 /**
@@ -50,6 +52,8 @@ export function ChatTab() {
   const [mode, setMode] = useState<DevelopmentMode>('instant');
   const [executionMode, setExecutionMode] = useState<ExecutionMode>(snapshot.config.executionMode);
   const [planning, setPlanning] = useState(false);
+  const [asking, setAsking] = useState(false);
+  const [questions, setQuestions] = useState<ClarifyingQuestion[]>();
   const [activePlanId, setActivePlanId] = useState<string>();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const outputRef = useRef<HTMLDivElement>(null);
@@ -75,8 +79,32 @@ export function ChatTab() {
     if (atBottom) el.scrollTop = el.scrollHeight;
   }, [streamed, runTick]);
 
+  /**
+   * Ask first, then build.
+   *
+   * The step in between exists because every ambiguity in a prompt gets
+   * resolved by somebody, and until now that somebody was a model, silently, in
+   * the first second of the build. Asking costs a few seconds and is skippable
+   * in one click; finding out at the end that "a login page with node" was
+   * built as a static HTML file costs the whole run.
+   *
+   * If the questions cannot be produced — no provider, a slow one, a timeout —
+   * this goes straight to building rather than blocking on a nicety.
+   */
   const submit = async () => {
-    if (!activeProject || !prompt.trim() || planning) return;
+    if (!activeProject || !prompt.trim() || planning || asking) return;
+    setAsking(true);
+    const asked = await run(() =>
+      api.clarify({ projectId: activeProject.id, goal: prompt.trim(), mode }),
+    );
+    setAsking(false);
+
+    if (asked?.questions.length) setQuestions(asked.questions);
+    else await build([]);
+  };
+
+  const build = async (answers: ClarifyingAnswer[]) => {
+    if (!activeProject || !prompt.trim()) return;
     setPlanning(true);
     const result = await run(() =>
       api.createPlan({
@@ -85,11 +113,13 @@ export function ChatTab() {
         mode,
         executionMode,
         autoStart: true,
+        answers,
       }),
     );
     setPlanning(false);
     if (result) {
       setActivePlanId(result.plan.id);
+      setQuestions(undefined);
       setPrompt('');
     }
   };
@@ -130,6 +160,15 @@ export function ChatTab() {
                     </p>
                   </div>
                 </div>
+              )}
+
+              {questions && (
+                <ClarifyPanel
+                  questions={questions}
+                  busy={planning}
+                  onBuild={(answers) => void build(answers)}
+                  onCancel={() => setQuestions(undefined)}
+                />
               )}
             </>
           )}
@@ -241,6 +280,8 @@ export function ChatTab() {
 
             <span className="grow" />
 
+            <ModelPicker />
+
             <label className="row subtle" style={{ gap: 4, fontSize: 'var(--text-xs)' }}>
               Gate
               <select
@@ -271,7 +312,13 @@ export function ChatTab() {
                   : 'e.g. Add Google sign-in to the settings page'
               }
               disabled={planning}
-              onChange={(e) => setPrompt(e.target.value)}
+              onChange={(e) => {
+                setPrompt(e.target.value);
+                // Questions asked about the previous sentence are not about
+                // this one. Leaving them up would collect answers to a prompt
+                // that no longer exists.
+                if (questions) setQuestions(undefined);
+              }}
               onKeyDown={(event) => {
                 // Enter sends; Shift+Enter is a newline. Ctrl/Cmd+Enter also
                 // sends, for people whose fingers expect that instead.
@@ -284,12 +331,12 @@ export function ChatTab() {
             <button
               type="button"
               className="btn btn--primary"
-              disabled={!prompt.trim() || planning}
+              disabled={!prompt.trim() || planning || asking}
               onClick={() => void submit()}
               style={{ height: 34 }}
             >
-              {planning ? <span className="spinner" /> : <IconSend size={14} />}
-              {planning ? 'Planning…' : 'Build it'}
+              {planning || asking ? <span className="spinner" /> : <IconSend size={14} />}
+              {asking ? 'Reading it…' : planning ? 'Planning…' : 'Build it'}
             </button>
           </div>
 
