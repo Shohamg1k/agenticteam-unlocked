@@ -226,6 +226,8 @@ Finding the server is evidence-driven at every step:
 | What runs it? | A `dev`/`start`/`serve` script; failing that a bare `server.js`, `app.js` or `index.js`, because a generated Express app frequently has no script at all. Django, Flask and FastAPI are detected from `manage.py` and what the entry file imports; Go from `main.go`. |
 | Which port? | The URL the server printed. Failing that, a port it announced in prose — `Server running on port 3000` is the first thing anyone writes. Failing that, the framework guess. |
 | Is that port ours? | Only if it was NOT already listening before we started. A port already in use belongs to somebody else, and proxying to it showed a stranger's application in the user's preview. |
+| Which loopback? | Both are tried, and the one that answers is the one the proxy connects to. On Windows `localhost` resolves to `::1` first and Vite binds only there, so a server that had started perfectly was invisible to a check on `127.0.0.1`. |
+| Are its dependencies there? | Every package in the project, not just the root — a MERN app is a `client/` and a `server/`, each with its own `package.json`. A `workspaces` field means one root install covers them all. |
 
 The visual check does not run on a project that serves its own pages. Reading an
 Express app's templates off disk answers a question nobody asked: static assets
