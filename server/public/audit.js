@@ -87,11 +87,46 @@
     }
   }
 
+  /**
+   * Is this element actually on the page right now?
+   *
+   * The ANCESTOR walk is the part that matters, and its absence failed real
+   * work: the close and add buttons of a popover that was closed were reported
+   * as "0x0px, no clickable area". They were nothing of the sort — they were
+   * inside a container that was not open yet. `getComputedStyle` on a child of
+   * a hidden parent still reports the child's own `display`, so asking only
+   * about the element says "visible" about something nobody can see.
+   *
+   * `offsetParent` is null for anything inside a `display:none` subtree, which
+   * settles it in one property for the common case; `position: fixed` has a
+   * null `offsetParent` legitimately, so that is checked separately.
+   */
   function isRendered(el) {
     var style = styleOf(el);
     if (!style) return false;
     if (style.display === 'none' || style.visibility === 'hidden') return false;
     if (parseFloat(style.opacity) === 0) return false;
+
+    if (el.offsetParent === null && style.position !== 'fixed') {
+      // Either inside a hidden subtree, or detached. Both mean "not on screen".
+      if (el !== document.body && el !== document.documentElement) return false;
+    }
+
+    // The explicit ways a container says "not yet": the hidden attribute, an
+    // aria-hidden region, a closed dialog or details element.
+    var node = el;
+    var depth = 0;
+    while (node && node !== document.documentElement && depth < 12) {
+      if (node.hasAttribute && node.hasAttribute('hidden')) return false;
+      if (node.getAttribute && node.getAttribute('aria-hidden') === 'true') return false;
+      var tag = node.tagName ? node.tagName.toLowerCase() : '';
+      if ((tag === 'dialog' || tag === 'details') && !node.open) return false;
+      var s2 = styleOf(node);
+      if (s2 && (s2.display === 'none' || s2.visibility === 'hidden')) return false;
+      node = node.parentElement;
+      depth++;
+    }
+
     return true;
   }
 
@@ -527,6 +562,29 @@
     return (lighter + 0.05) / (darker + 0.05);
   }
 
+  /**
+   * Did we find a real background, or fall back to assuming white?
+   *
+   * The fallback exists so the check can say something about a plain page, but
+   * on a themed one it is a guess — and a guess about the background is a guess
+   * about whether the text is readable, which is the entire finding.
+   */
+  function hasResolvedBackground(el) {
+    var node = el;
+    var depth = 0;
+    while (node && node.nodeType === 1 && depth < 20) {
+      var style = styleOf(node);
+      if (style) {
+        if (style.backgroundImage && style.backgroundImage !== 'none') return false;
+        var bg = parseColour(style.backgroundColor);
+        if (bg && bg.a > 0.9) return true;
+      }
+      node = node.parentElement;
+      depth++;
+    }
+    return false;
+  }
+
   /** The first ancestor with a background you can actually see. */
   function effectiveBackground(el) {
     var node = el;
@@ -570,6 +628,23 @@
       if (!fg || !bg || fg.a < 0.1) continue;
 
       var ratio = contrastRatio(fg, bg);
+
+      /**
+       * Only when the background is genuinely known.
+       *
+       * `effectiveBackground` walks up for the first opaque colour and gives up
+       * on a gradient or an image, and a wrong answer here reads as
+       * "unreadable" about text a person can see perfectly well. Every day
+       * number in a calendar was reported as black-on-black because of it.
+       *
+       * So: skip anything whose own colours are inherited through a background
+       * this cannot resolve, and skip the element if it is smaller than real
+       * text — a 0-size node has no colours worth judging.
+       */
+      var box = el.getBoundingClientRect();
+      if (box.width < 4 || box.height < 4) continue;
+      if (!hasResolvedBackground(el)) continue;
+
       if (ratio < 2.0) {
         add(
           'invisible-text',

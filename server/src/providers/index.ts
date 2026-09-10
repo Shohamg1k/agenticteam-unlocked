@@ -75,11 +75,21 @@ function register(adapter: ProviderAdapter): void {
  * Build the registry. Order does not matter — the ladder is computed from tier
  * and policy, not from registration order.
  */
+/** Catalogue providers that are not offered, by id. */
+const EXCLUDED_PROVIDERS = new Set(['groq']);
+
 export function buildRegistry(): void {
   registry.clear();
 
   register(new OllamaAdapter());
-  for (const config of PROVIDER_CONFIGS) register(new OpenAICompatibleAdapter(config));
+  // Groq is deliberately excluded. It is fast and free, and on real work it
+  // produced markedly worse output than the subscription agents — handed a
+  // repair after two Claude Code attempts it made the page worse rather than
+  // better. A ladder rung that costs nothing and undoes progress is not a
+  // saving. Delete this filter to put it back.
+  for (const config of PROVIDER_CONFIGS.filter((c) => !EXCLUDED_PROVIDERS.has(c.id))) {
+    register(new OpenAICompatibleAdapter(config));
+  }
   register(new AnthropicAdapter());
   register(new GoogleAdapter());
   for (const config of CLI_AGENTS) register(new CliAgentAdapter(config));

@@ -37,7 +37,7 @@ import { recordOutcome, routeTask, activePolicy } from './router.js';
 import { projectCheckFeedback, runProjectChecks } from './projectchecks.js';
 import { repairFeedback, scanForSecrets, verifyArtifacts } from './verify.js';
 import { findPlaceholders, placeholderFeedback, placeholderIssues } from './placeholders.js';
-import { runVisualCheck, visualFeedback } from './visual/check.js';
+import { runVisualCheck } from './visual/check.js';
 import { auditAutoAccept, checkGate, enqueueReview } from './review.js';
 import { takeCheckpoint } from './checkpoints.js';
 import { collectWorktreeChanges, createWorktree } from './git.js';
@@ -1047,24 +1047,39 @@ async function runAttempt(args: {
     files,
   });
 
+  /**
+   * Reported, never fatal.
+   *
+   * It failed a demo. An activity-tracker app was produced three times, each
+   * time correctly, and each time this rejected it: two buttons inside a CLOSED
+   * popover were called "0x0px, no clickable area", and every day number in the
+   * calendar was called unreadable on a contrast reading it had got wrong.
+   * Three attempts, two models, and the work was thrown away over defects that
+   * were entirely in the checking.
+   *
+   * A rendering heuristic cannot be a gate. It looks at a page without knowing
+   * what the page is for — which control is meant to be hidden until you open
+   * something, which element's colours come from a theme it did not trigger —
+   * and every one of those is a false positive that destroys real work. Being
+   * wrong occasionally is fine for something that tells you; it is disqualifying
+   * for something that decides.
+   *
+   * So the findings go in the report, where a person can look at them next to
+   * the actual page, and the syntax, secret, placeholder and project checks —
+   * all of which can say precisely why they failed — remain the gates.
+   */
   if (visual.unavailable) {
     worklog(task, 'verification', visual.unavailable, 'info');
   } else if (!visual.ok) {
-    task.verification = {
-      ok: false,
-      tier1,
-      tier2: [visual.check],
-      repairs: previousRepairs + 1,
-      at: Date.now(),
-    };
-    attempt.outcome = 'verification-failed';
+    const problems = visual.check.issues.filter((i) => i.severity === 'error').length;
     worklog(
       task,
       'verification',
-      `The page renders wrong: ${visual.check.issues.filter((i) => i.severity === 'error').length} problem(s) found in a real browser.`,
+      `Rendered the page and found ${problems} possible layout problem(s). Recorded for review — ` +
+        `this does not fail the task, because the check cannot tell a deliberately hidden control ` +
+        `from a broken one. Open the preview and use Check layout to judge them.`,
       'warn',
     );
-    return { kind: 'verification-failed', feedback: visualFeedback(visual.check) };
   } else {
     worklog(task, 'verification', `Rendered and checked ${visual.check.checked ?? 0} page view(s) — no layout problems.`);
   }
@@ -1103,9 +1118,10 @@ async function runAttempt(args: {
     ok: tier1.ok && tier2.ok,
     tier1,
     // The visual check is listed alongside the project checks so the review
-    // summary says what was looked at. It passed to get here, but "rendered
-    // two viewports and found nothing" and "nobody looked" must not read the
-    // same in the report — which is why a skipped one is carried too.
+    // summary says what was looked at. It is advisory — its findings reach a
+    // person and never fail a task — but "rendered two viewports and found
+    // nothing", "found something worth a look" and "nobody looked" must all
+    // read differently in the report.
     tier2: [visual.check, ...tier2.checks],
     repairs: previousRepairs,
     at: Date.now(),
