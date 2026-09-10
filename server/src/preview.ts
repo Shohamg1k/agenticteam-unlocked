@@ -364,7 +364,7 @@ async function startDevServerPreview(
   }
 
   const proxyPort = await findFreePort(target.port + 1);
-  preview.proxy = createProxy(target.port, proxyPort, projectId);
+  preview.proxy = createProxy(target.port, proxyPort, projectId, target.host);
   preview.state.status = 'running';
   preview.state.statusDetail = undefined;
   preview.state.port = proxyPort;
@@ -374,7 +374,7 @@ async function startDevServerPreview(
   preview.state.error = undefined;
   changed();
 
-  log(`Preview running at ${preview.state.url} (proxying your dev server on :${target.port})`, 'info', {
+  log(`Preview running at ${preview.state.url} (proxying your dev server on ${formatHost(target.host)}:${target.port})`, 'info', {
     projectId,
   });
   return preview.state;
@@ -392,18 +392,20 @@ async function waitForDevServer(
   /** Undefined when the guess cannot be trusted — see the caller. */
   guessedPort: number | undefined,
   timeoutMs: number,
-): Promise<{ port: number; path: string } | undefined> {
+): Promise<{ port: number; path: string; host: string } | undefined> {
   const deadline = Date.now() + timeoutMs;
 
   while (Date.now() < deadline) {
     const announced = preview.state.detectedUrl;
     const announcedPort = announced ? portOf(announced) : undefined;
 
-    if (announcedPort && (await isPortOpen(announcedPort))) {
-      return { port: announcedPort, path: announced ? pathOf(announced) : '/' };
+    if (announcedPort) {
+      const host = await openLoopbackHost(announcedPort);
+      if (host) return { port: announcedPort, path: announced ? pathOf(announced) : '/', host };
     }
-    if (guessedPort !== undefined && (await isPortOpen(guessedPort))) {
-      return { port: guessedPort, path: '/' };
+    if (guessedPort !== undefined) {
+      const host = await openLoopbackHost(guessedPort);
+      if (host) return { port: guessedPort, path: '/', host };
     }
     if (preview.state.status === 'failed') return undefined;
 
@@ -441,17 +443,22 @@ export function stopAllPreviews(): void {
 // The proxy
 // ---------------------------------------------------------------------------
 
-function createProxy(targetPort: number, listenPort: number, projectId: string): http.Server {
+function createProxy(
+  targetPort: number,
+  listenPort: number,
+  projectId: string,
+  targetHost = '127.0.0.1',
+): http.Server {
   const overlay = loadOverlayScript();
 
   const server = http.createServer((req, res) => {
     const proxyReq = http.request(
       {
-        hostname: '127.0.0.1',
+        hostname: targetHost,
         port: targetPort,
         path: req.url,
         method: req.method,
-        headers: { ...req.headers, host: `127.0.0.1:${targetPort}` },
+        headers: { ...req.headers, host: `${formatHost(targetHost)}:${targetPort}` },
       },
       (proxyRes) => {
         const contentType = String(proxyRes.headers['content-type'] ?? '');
@@ -504,7 +511,7 @@ function createProxy(targetPort: number, listenPort: number, projectId: string):
   // HMR and dev-server live reload are WebSockets; without this the preview
   // loads once and then never updates, which looks like the app is frozen.
   server.on('upgrade', (req, socket, head) => {
-    const upstream = net.connect(targetPort, '127.0.0.1', () => {
+    const upstream = net.connect(targetPort, targetHost, () => {
       const headers = Object.entries(req.headers)
         .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
         .join('\r\n');
@@ -677,19 +684,63 @@ export function previewDebugContext(projectId: string): string {
 // Ports
 // ---------------------------------------------------------------------------
 
-function isPortOpen(port: number, host = '127.0.0.1'): Promise<boolean> {
+/**
+ * The two loopback addresses, and why both have to be tried.
+ *
+ * On Windows `localhost` resolves to `::1` first, and a dev server told to
+ * listen on "localhost" binds ONLY there. Vite does exactly this. So a server
+ * that has started perfectly, and has printed `http://localhost:5173/` to say
+ * so, is invisible to anything that connects to `127.0.0.1` — which is what
+ * every check here used to do.
+ *
+ * The symptom was a preview that timed out after ninety seconds saying "it said
+ * it was on http://127.0.0.1:5173/, but nothing answered there", while the app
+ * sat there serving requests to any browser that asked for it by name.
+ */
+const LOOPBACK_HOSTS = ['127.0.0.1', '::1'] as const;
+
+/** An IPv6 literal needs brackets inside a Host header or a URL. */
+function formatHost(host: string): string {
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+/** Is anything listening on this port, on either loopback address? */
+function isPortOpen(port: number): Promise<boolean> {
+  return openLoopbackHost(port).then((host) => host !== undefined);
+}
+
+/**
+ * Which loopback address is serving this port, if either.
+ *
+ * The answer matters beyond a yes/no: the proxy has to connect to the address
+ * that actually answered, or it forwards into the same void.
+ */
+function openLoopbackHost(port: number): Promise<string | undefined> {
   return new Promise((resolve) => {
-    const socket = net.connect({ port, host });
-    const done = (open: boolean) => {
-      socket.destroy();
-      resolve(open);
-    };
-    socket.setTimeout(1_000);
-    socket.on('connect', () => done(true));
-    socket.on('timeout', () => done(false));
-    socket.on('error', () => done(false));
+    let remaining = LOOPBACK_HOSTS.length;
+    let settled = false;
+
+    for (const host of LOOPBACK_HOSTS) {
+      const socket = net.connect({ port, host });
+      const done = (open: boolean) => {
+        socket.destroy();
+        if (settled) return;
+        if (open) {
+          settled = true;
+          resolve(host);
+          return;
+        }
+        remaining--;
+        if (remaining === 0) resolve(undefined);
+      };
+      socket.setTimeout(1_000);
+      socket.on('connect', () => done(true));
+      socket.on('timeout', () => done(false));
+      socket.on('error', () => done(false));
+    }
   });
 }
+
 
 async function findFreePort(start: number): Promise<number> {
   for (let port = start; port < start + 100; port++) {

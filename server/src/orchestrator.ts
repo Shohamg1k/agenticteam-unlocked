@@ -44,6 +44,7 @@ import { collectWorktreeChanges, createWorktree } from './git.js';
 import type { Worktree } from './git.js';
 import { startCooldown } from './quota.js';
 import { addMemory } from './memory.js';
+import { forgetPreviewCapability } from './preview.js';
 import { activeSkillsFor, loadAgents } from './skills.js';
 import { DEFAULT_AGENT_BY_CAPABILITY } from './library/agents.js';
 import { getProject } from './projects.js';
@@ -1173,6 +1174,13 @@ export function clearPendingFiles(taskId: string): void {
 export async function applyFiles(projectId: string, task: Task, files: FileArtifact[]): Promise<string[]> {
   const ps = projectState(projectId);
   if (!ps) throw new Error(`No such project: ${projectId}`);
+
+  // Writing files can change what starting a preview would do — a task that
+  // just created package.json turns a folder of static files into an app with
+  // a dev server. The file watcher clears this too, but it runs a moment later,
+  // and the moment in between is exactly when someone presses Go Live on the
+  // build that has just finished.
+  forgetPreviewCapability(projectId);
 
   await takeCheckpoint(projectId, `before applying: ${task.title}`, { planId: task.planId, taskId: task.id });
 
